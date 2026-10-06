@@ -11,7 +11,7 @@ Imagine you are stuck on a homework problem. You walk up to the teacher's desk t
 Mrs. Teske was my 7th and 8th grade teacher at St. John's Lutheran School in Buckley. My class only had about ten students, and she taught us almost every subject. I spent almost every school day with her for two years. My sister had her as a teacher, too, and my brother still goes there.
 
 **Purpose Statement**
-My 7th and 8th grade teacher, Mrs. Teske, is one of the main reasons I was ready for high school.
+My 7th and 8th grade teacher, Mrs. Kata Teske, is one of the main reasons I was ready for high school.
 
 **Preview Statement**
 She was caring, she was dedicated to getting us ready, and both traits had a big impact on the student I am today.

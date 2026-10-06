@@ -30,7 +30,7 @@ Card 1: Introduction
 9  about __10__ students / almost every subject
 10 almost every school day for __2 years__
 11 sister had her too / brother still goes there
-12 ↓ ○ PURPOSE: "one of the main reasons I was ready for high school"
+12 ↓ ○ PURPOSE: "__Mrs. Kata Teske__" → a main reason I was ready for high school
 13 ↑ [3 FINGERS] caring / dedicated / impact on me
 14 ///  [CLICK → SLIDE 2]
 15 [MOVE → SPOT A / PLANT FEET]
