@@ -1,6 +1,6 @@
 # Tribute Speech Notecards: Mrs. Teske
 
-5 cards, one per slide. Same system as the Bermuda cards.
+5 cards for 6 slides. Same system as the Bermuda cards.
 
 **Key**
 - `○ WORD` = circle the word
@@ -28,7 +28,7 @@ Card 1: Introduction
 7  ///  ★ KEEP EYES UP
 8  ↓ ○ CREDIBILITY: 7th + 8th grade / __St. John's Lutheran__, Buckley
 9  about __10__ students / almost every subject
-10 almost every school day for __2 years__
+10 for __2 years__
 11 sister had her too / brother still goes there
 12 ↓ ○ PURPOSE: "__Mrs. Kata Teske__" → a main reason I was ready for high school
 13 ↑ [3 FINGERS] caring / dedicated / impact on me
@@ -39,7 +39,7 @@ Card 1: Introduction
 Card 2: Caring
 
 ```
-1  CARING | SLIDE 2 | SPOT A                           ②
+1  CARING | SLIDES 2–3 | SPOT A                        ②
 2  ↓ ↑ "First, Mrs. Teske was __caring__."
 3  ○ 7TH GRADE: only boy in my class
 4  treated me the same as everyone → never felt _weird_
@@ -47,19 +47,19 @@ Card 2: Caring
 6  slowed down / explained it so it made sense
 7  ↑ ○ HER DESK: any time → explained until you _got it_
 8  // [LOOK LEFT / MIDDLE / RIGHT]
-9  ↓ ○ FUN: [GESTURE → PHOTOS]
+9  [CLICK S3] ↓ ○ FUN: [GESTURE → PHOTOS]
 10 __December__ = a treat every day / party every holiday
 11 ↑ [SMILE] stories: her family / past students
 12 "spelling tests turned into _story time_"
 13 ↓ ○ TRANSITION: cared about us → also expected a _lot_
-14 [CLICK → SLIDE 3]
+14 [CLICK → SLIDE 4]
 15 [MOVE → SPOT B / PLANT FEET]
 ```
 
 Card 3: Dedicated
 
 ```
-1  DEDICATED | SLIDE 3 | SPOT B                        ③
+1  DEDICATED | SLIDE 4 | SPOT B                        ③
 2  ↓ ↑ "Second, Mrs. Teske was __dedicated__"
 3  to getting us ready for high school
 4  ○ HOMEWORK: quite a bit
@@ -71,35 +71,35 @@ Card 3: Dedicated
 10 ↓ ○ nobody really thought about slacking off
 11 ↑ "Working hard was just _normal_."
 12 ///
-13 ↓ ○ TRANSITION: caring + dedication → still help me _today_
-14 [CLICK → SLIDE 4]
+13 ↓ ○ TRANSITION: "caring + dedication still help me _today_"
+14 [CLICK → SLIDE 5]
 15 [MOVE → SPOT C / DO NOT BLOCK BOARD]
 ```
 
 Card 4: Impact on Me
 
 ```
-1  IMPACT | SLIDE 4 | SPOT C                           ④
+1  IMPACT | SLIDE 5 | SPOT C                           ④
 2  ↓ ↑ "Mrs. Teske helped make me the student I am today."
-3  ○ not only her → but every day with her
-4  ↓ ○ HIGH SCHOOL: more prepared than a lot of students
-5  [GESTURE → PHOTOS] __advanced classes__ / __top ten__ of my class
+3  ○ not only her → but a big part of it
+4  ↓ ○ CARING → more _confident_ when something is hard
+5  she took time to explain → I can figure it out if I keep working
 6  // [LOOK LEFT / MIDDLE / RIGHT]
-7  ↓ ○ CONFIDENT when something is hard
-8  she taught me → figure it out if I keep working
-9  ///  ★ KEEP EYES UP
-10 ↑ [STRONG] "Her __caring__ made me feel like I could do it,"
-11 "and her __dedication__ made sure I actually _did_."
-12 ///
-13 // [LOOK AROUND]
-14 [CLICK → SLIDE 5]
+7  ↓ ○ DEDICATED → ready for high school
+8  more prepared than a lot of students
+9  [GESTURE → PHOTOS] __advanced classes__ / __top ten__ of my class
+10 ///  ★ KEEP EYES UP
+11 ↑ [STRONG] "Her __caring__ made me feel like I could do it,"
+12 "and her __dedication__ made sure I actually _did_."
+13 ///  [LOOK AROUND]
+14 [CLICK → SLIDE 6]
 15 [MOVE → SPOT B / PLANT FEET]
 ```
 
 Card 5: Conclusion
 
 ```
-1  CONCLUSION | SLIDE 5 | SPOT B                       ⑤
+1  CONCLUSION | SLIDE 6 | SPOT B                       ⑤
 2  ↓ ↑ [3 FINGERS] caring / dedication / impact on me
 3  "one of the most important teachers I have ever had"
 4  //  ○ FULL CIRCLE
@@ -109,7 +109,7 @@ Card 5: Conclusion
 8  ↑ "__We just needed to know she was there.__"
 9  ///  ★ KEEP EYES UP
 10 ↓ ★ FINAL GLANCE → ↑ NO MORE CARD
-11 expect the most = usually care the most
+11 she showed me: expect the most = usually care the most
 12 don't wait to take it seriously / thank them
 13 // "__Mine was__"
 14 "__Mrs. Teske.__"
