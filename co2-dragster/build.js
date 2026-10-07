@@ -25,7 +25,7 @@ const geom = JSON.parse(fs.readFileSync(geomPath, 'utf8'));
     crease: BV.sheet1Crease(geom) + BV.sheet1Pods(geom),
     leaderTo: BV.crossAt(geom, 3.667),
     marker: BV.text(324, 23.6, 'SHEET 1 OF 2  ·  back view on sheet 2', { size: 7.5, fill: '#000' }),
-    note: ['edge where the round tube meets', 'the 3/8" flat web under it', '(23/32" up at the rear; back view: sheet 2)']
+    note: ['edge where the round tube meets', 'the 3/8" flat web under it', '(23/32" up along the housing; back view: sheet 2)']
       .map((s, i) => BV.text(306, 360 + i * 8.5, s, { size: 7 })).join(''),
     blue: BV.BLUE,
     ink: BV.INK,
@@ -85,9 +85,10 @@ const geom = JSON.parse(fs.readFileSync(geomPath, 'utf8'));
         // NOSE label: keep it clear of the left page edge, just inside the nose line.
         : x0 > 970 && x0 < 980 && y0 > 450 && y0 < 458 ? 26 : 0;
       const dx = AXIS2 - x0 - x1 + nudge;
+      const dy = x0 > 970 && x0 < 980 && y0 > 450 && y0 < 458 ? 2 : 0;   // NOSE clears the ground hatch
       for (const m of members) {
         const t = m.el.getAttribute('transform');
-        m.el.setAttribute('transform', `translate(${dx.toFixed(3)} 0)` + (t ? ' ' + t : ''));
+        m.el.setAttribute('transform', `translate(${dx.toFixed(3)} ${dy})` + (t ? ' ' + t : ''));
       }
     }
     // Axle centerlines overshoot into the header notes; stop them at the wheel tops.
@@ -187,6 +188,67 @@ const geom = JSON.parse(fs.readFileSync(geomPath, 'utf8'));
       nEyes++;
     }
 
+    // Screw eye shanks (0.04" wire): two dashed lines inside the wood and two solid lines for the bit
+    // between the body bottom and the ring, as on sheet 2. They replace the single dashed line.
+    const SHANK = 1.44, BODY_BOTTOM = 414, RING_TOP = 418.1;
+    let nShank = 0;
+    for (const it of moved.filter(it => !it.isText)) {
+      if (Math.abs(it.y0 - 393.84) > 1 || Math.abs(it.y1 - 417.96) > 1 || it.x1 - it.x0 > 1) continue;
+      const cx = AXIS2 - (it.x0 + it.x1) / 2;
+      const g = document.createElementNS(NS, 'g');
+      for (const s of [-1, 1]) {
+        const x = (cx + s * SHANK).toFixed(2);
+        g.insertAdjacentHTML('beforeend',
+          `<path d="M ${x} ${it.y0.toFixed(2)} L ${x} ${BODY_BOTTOM}" fill="none" stroke="rgb(20%, 20%, 20%)" stroke-width="0.7" stroke-dasharray="2.8 1.4"/>` +
+          `<path d="M ${x} ${BODY_BOTTOM} L ${x} ${RING_TOP}" fill="none" stroke="${extras.ink}" stroke-width="0.6"/>`);
+      }
+      it.el.parentNode.replaceWith(g);
+      nShank++;
+    }
+
+    // Lines that run through text: break them around the label boxes (plus 1.5 pt).
+    const textBoxes = [...svg.querySelectorAll('g')].filter(e => e.querySelector(':scope > use'))
+      .map(e => e.getBoundingClientRect()).filter(b => b.width > 0);
+    const holeClip = (id, el) => {
+      const r = el.getBoundingClientRect();
+      const hits = textBoxes.filter(b => b.right > r.left - 1.5 && b.left < r.right + 1.5 &&
+        b.bottom > r.top - 1.5 && b.top < r.bottom + 1.5);
+      if (!hits.length) return 0;
+      const cp = document.createElementNS(NS, 'clipPath');
+      cp.id = id; cp.setAttribute('clipPathUnits', 'userSpaceOnUse');
+      const p = document.createElementNS(NS, 'path');
+      // clip paths are in the element's own coordinates; the mirror wrapper flips x
+      const mx = x => AXIS2 - x;
+      let d = 'M -2000 -2000 H 3000 V 3000 H -2000 Z';
+      for (const b of hits) d += ` M ${mx(b.left - 1.5)} ${b.top - 1.5} V ${b.bottom + 1.5} H ${mx(b.right + 1.5)} V ${b.top - 1.5} Z`;
+      p.setAttribute('d', d); p.setAttribute('clip-rule', 'evenodd');
+      cp.appendChild(p); svg.querySelector('defs').appendChild(cp);
+      return hits.length;
+    };
+    let nBroken = 0;
+    moved.filter(it => !it.isText).forEach((it, i) => {
+      const dash = it.el.getAttribute('stroke-dasharray') || '';
+      const isGuide = dash === '0.35 0.7';                                  // dotted guide marks between views
+      const isTopCL = dash.startsWith('5 1 1 1') && Math.abs(it.y0 - 136.8) < 1 && it.x1 - it.x0 > 500;
+      if (!isGuide && !isTopCL) return;
+      const wrap = it.el.parentNode;
+      if (wrap.getAttribute('clip-path')) return;
+      if (holeClip('around-text-' + i, it.el)) { wrap.setAttribute('clip-path', `url(#around-text-${i})`); nBroken++; }
+    });
+
+    // Extension lines that point at the screw eyes start inside the eye outline: start them 1.5 pt below it.
+    const clip3 = clip.cloneNode(true);
+    clip3.id = 'below-eye';
+    clip3.firstChild.setAttribute('y', '144.5');
+    svg.querySelector('defs').appendChild(clip3);
+    let nExt = 0;
+    for (const it of moved.filter(it => !it.isText)) {
+      if ((it.el.getAttribute('stroke') || '').indexOf('12.156677%') < 0 || it.x1 - it.x0 > 1) continue;
+      if (Math.abs(it.y0 - 141.12) > 1) continue;
+      it.el.parentNode.setAttribute('clip-path', 'url(#below-eye)');
+      nExt++;
+    }
+
     // Slide the whole sheet 8 pt left: the mirrored dimensions sat 0.16" from the right edge,
     // closer than many printers can print. Scale is unchanged.
     const shift = document.createElementNS(NS, 'g');
@@ -196,7 +258,7 @@ const geom = JSON.parse(fs.readFileSync(geomPath, 'utf8'));
 
     return {
       svg: new XMLSerializer().serializeToString(svg),
-      counts: { eyes: nEyes, projection: nProj, moved: moved.length, kept: kept.length, blocks: blocks.size, texts: texts.length },
+      counts: { eyes: nEyes, shanks: nShank, broken: nBroken, eyeExt: nExt, projection: nProj, moved: moved.length, kept: kept.length, blocks: blocks.size, texts: texts.length },
     };
   }, extras);
 

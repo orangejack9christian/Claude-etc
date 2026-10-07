@@ -110,7 +110,10 @@ function buildSheet2(geom) {
     `A ${f(eyeOut * 72)} ${f(eyeOut * 72)} 0 1 0 ${f(px(eyeOut))} ${f(py(-0.14))} Z M ${f(px(eyeIn))} ${f(py(-0.14))} ` +
     `A ${f(eyeIn * 72)} ${f(eyeIn * 72)} 0 1 1 ${f(px(-eyeIn))} ${f(py(-0.14))} A ${f(eyeIn * 72)} ${f(eyeIn * 72)} 0 1 1 ${f(px(eyeIn))} ${f(py(-0.14))} Z" ` +
     `fill="rgb(55%, 55%, 55%)" fill-rule="evenodd" stroke="${INK}" stroke-width="0.7"/>`);
-  for (const s of [-1, 1]) add(line(px(s * 0.02), py(-0.14 + eyeOut), px(s * 0.02), py(0), INK, 0.7));
+  for (const s of [-1, 1]) {
+    add(line(px(s * 0.02), py(-0.14 + eyeOut), px(s * 0.02), py(0), INK, 0.7));
+    add(line(px(s * 0.02), py(0), px(s * 0.02), py(0.28), HIDDEN, 0.7, ' stroke-dasharray="2.8 1.4"'));   // shank in the wood
+  }
 
   // --- centerlines
   const dashdot = ' stroke-dasharray="5 1 1 1"';
@@ -135,18 +138,17 @@ function buildSheet2(geom) {
   hdim(-zout, zout, -1.10, '2 5/16" over the wheels', ground);
   hdim(-axEnd, axEnd, -1.35, '2 1/2" axle', P.axle_y - 1 / 16);
 
-  const cols = { clear: 1.50, axle: 1.80, pod: 2.10, crease: 2.40, cart: 2.70, top: 3.00 };
+  const cols = { clear: 1.50, axle: 1.80, pod: 2.10, cart: 2.40, top: 2.70 };
   const top = cy + hr;
-  ext(px(hw) + 2, py(0), px(cols.top) + 3, py(0));
+  // Extension lines from the pod pass behind the right wheel: leave them out where the wheel is.
+  ext(px(zout) + 1.5, py(0), px(cols.top) + 3, py(0));
   ext(px(axEnd) + 2, py(P.axle_y), px(cols.axle) + 3, py(P.axle_y));
-  ext(px(hw) + 2, py(podTop), px(cols.pod) + 3, py(podTop));
-  ext(px(web) + 2, py(crease), px(cols.crease) + 3, py(crease));
+  ext(px(zout) + 1.5, py(podTop), px(cols.pod) + 3, py(podTop));
   ext(px(hr) + 2, py(cy), px(cols.cart) + 3, py(cy));
   ext(px(0.05), py(top), px(cols.top) + 3, py(top));
   vdim(ground, 0, cols.clear, '7/16"');
   vdim(0, P.axle_y, cols.axle, '3/8"');
   vdim(0, podTop, cols.pod, '5/8"');
-  vdim(0, crease, cols.crease, '23/32"');
   vdim(0, cy, cols.cart, '1 1/4" to CO2 CL');
   vdim(0, top, cols.top, '1 13/16"');
 
@@ -175,6 +177,7 @@ function buildSheet2(geom) {
   add(text(px(0), py(2.30), 'seen from behind (the CO2 end)', { size: 7, fill: CENTER, anchor: 'middle' }));
   add(text(28.8, 23.6, 'CO2 DRAGSTER  -  WORKING DRAWING', { size: 13, fill: '#000', bold: true }));
   add(text(324, 23.6, 'SHEET 2 OF 2  ·  back view', { size: 7.5, fill: '#000' }));
+  add(text(470, 33.6, 'Rev B 10/7/2026: sheet 2 (back view) added', { size: 6.5, fill: '#000' }));
   add(text(28.8, 33.6, 'Scale 1:1 (full size).  Inches.  Hidden lines dashed.  Print on 8.5 x 14 legal, landscape, at ACTUAL SIZE / 100%.', { fill: '#000' }));
   add(text(28.8, 42.8, 'Back view: looking at the rear (CO2 end).  The front pod and front wheels are the same size and sit directly behind the rear ones, so they are hidden.', { fill: '#000' }));
 
@@ -184,16 +187,16 @@ function buildSheet2(geom) {
   add(text(561.6, 568.6, 'square', { size: 6.5, fill: '#000', anchor: 'middle' }));
 
   add(`<rect x="720" y="507.6" width="270" height="90" fill="none" stroke="${INK}" stroke-width="1"/>`);
-  const rows = [['Name:', 'Christian Kidwell'], ['Section:', '________________'], ['Date:', '10/7/2026'],
+  const rows = [['Name:', 'Christian Kidwell'], ['Section:', '________________'], ['Date:', '10/2/2026'],
     ['Sheet:', '2 of 2 (back view), scale 1:1'], ['Material:', 'balsa, one piece']];
   rows.forEach(([k, v], i) => {
-    const y = 525.4 + i * 17.3;
+    const y = 523.9 + i * 17.3;
     add(text(727.2, y, k, { fill: '#000', bold: true }));
     add(text(781.2, y, v, { fill: '#000' }));
   });
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="1008" height="612" viewBox="0 0 1008 612">` +
-    `<rect width="1008" height="612" fill="#fff"/>${out.join('\n')}</svg>`;
+    `<rect width="1008" height="612" fill="#fff"/><g transform="translate(-8 0)">${out.join('\n')}</g></svg>`;
 }
 
 // ---------------------------------------------------------------------------
