@@ -1,7 +1,8 @@
 // Build the working drawing:
 //  sheet 1: the original top and side views mirrored left-to-right (cartridge on
-//           the right, lettering still readable), wheel projection lines, and the
-//           edge where the round tube meets the 3/8" web, from the math model.
+//           the right, lettering still readable), wheel projection lines, the
+//           edge where the round tube meets the 3/8" web, and the axle pods'
+//           teardrop outlines, from the math model.
 //  sheet 2: the back view, drawn from the math model (back_view.js).
 // Output: a true-size 14 x 8.5 in two-page PDF plus one SVG per sheet.
 //
@@ -21,7 +22,7 @@ const geom = JSON.parse(fs.readFileSync(geomPath, 'utf8'));
   await page.setContent(`<!doctype html><html><body style="margin:0">${svgText}</body></html>`);
 
   const extras = {
-    crease: BV.sheet1Crease(geom),
+    crease: BV.sheet1Crease(geom) + BV.sheet1Pods(geom),
     leaderTo: BV.crossAt(geom, 3.667),
     marker: BV.text(324, 23.6, 'SHEET 1 OF 2  ·  back view on sheet 2', { size: 7.5, fill: '#000' }),
     note: ['edge where the round tube meets', 'the 3/8" flat web under it', '(23/32" up at the rear; back view: sheet 2)']
@@ -136,8 +137,9 @@ const geom = JSON.parse(fs.readFileSync(geomPath, 'utf8'));
     const after = sideBody.el.parentNode; // the mirror wrapper
     after.parentNode.insertBefore(proj, after.nextSibling);
 
-    // The edge where the round tube meets the 3/8" web (from the math model),
-    // drawn over the side-view body, plus its note and the sheet marker.
+    // The edge where the round tube meets the 3/8" web and the axle pod outlines
+    // (from the math model), drawn over the side-view body, plus the note and
+    // the sheet marker.
     const add = (html, before) => {
       const g = document.createElementNS(NS, 'g');
       g.innerHTML = html;

@@ -199,6 +199,18 @@ function sheet1Crease(geom) {
   return `<path d="${d}" fill="none" stroke="${INK}" stroke-width="0.8" stroke-linejoin="round" stroke-linecap="round"/>`;
 }
 
+// The axle pods' teardrop outlines in the side view of sheet 1: the whole rear
+// pod (inside the tall rear block), and the lower edge of the front pod (inside
+// the spine's outline; its upper edge is already the car's outline).
+function sheet1Pods(geom) {
+  const sx = x => (12.5 - x) * 72, sy = y => (5.75 - y) * 72;
+  const poly = pts => 'M ' + pts.map(([x, y]) => `${f(sx(x))} ${f(sy(y))}`).join(' L ');
+  const rear = poly(geom.pods.rear) + ' Z';
+  const front = poly(geom.pods.front_lower);
+  return [rear, front].map(d =>
+    `<path d="${d}" fill="none" stroke="${INK}" stroke-width="0.9" stroke-linejoin="round" stroke-linecap="round"/>`).join('');
+}
+
 function crossAt(geom, x) {
   const c = geom.crease;
   for (let i = 1; i < c.length; i++) if (c[i][0] >= x) {
@@ -208,4 +220,4 @@ function crossAt(geom, x) {
   return null;
 }
 
-module.exports = { buildSheet2, sheet1Crease, crossAt, text, line, BLUE, INK };
+module.exports = { buildSheet2, sheet1Crease, sheet1Pods, crossAt, text, line, BLUE, INK };

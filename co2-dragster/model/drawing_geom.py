@@ -48,6 +48,52 @@ def crease(n=331):
     return pts
 
 
+def pod_outline(axle_x, n=90):
+    """Side-view outline of a teardrop axle pod (its flat outer face is the
+    widest part of the car, so the whole outline is a visible edge).
+    Closed loop: axle circle (r = pod_r) joined by tangent lines to the tail
+    circle (r = spine_r, pod_tail behind the axle)."""
+    c1 = np.array([axle_x, P["axle_y"]]); r1 = P["pod_r"]
+    c2 = np.array([axle_x - P["pod_tail"], P["spine_r"]]); r2 = P["spine_r"]
+    d = np.linalg.norm(c2 - c1); u = (c2 - c1) / d; up = np.array([-u[1], u[0]])
+    ca = (r1 - r2) / d; sa = np.sqrt(1 - ca * ca)
+    na, nb = ca * u + sa * up, ca * u - sa * up
+    n_hi, n_lo = (na, nb) if na[1] > nb[1] else (nb, na)
+    ang = lambda v: np.arctan2(v[1], v[0])
+
+    def arc(c, r, a0, a1, through):
+        # sweep from a0 to a1 in whichever direction passes through `through`
+        ccw = (a1 - a0) % (2 * np.pi)
+        t = (through - a0) % (2 * np.pi)
+        sweep = ccw if t < ccw else ccw - 2 * np.pi
+        th = a0 + np.linspace(0, 1, n) * sweep
+        return [c + r * np.array([np.cos(a), np.sin(a)]) for a in th]
+
+    loop = arc(c1, r1, ang(n_hi), ang(n_lo), ang(-u))          # around the front of the axle
+    loop += arc(c2, r2, ang(n_lo), ang(n_hi), ang(u))          # around the end of the tail
+    loop.append(loop[0])
+    pts = np.array(loop)
+    err = np.abs(D.round_cone(pts, tuple(c1), tuple(c2), r1, r2)).max()
+    return pts, float(err)
+
+
+def pods():
+    """Rear pod: the whole teardrop (it sits inside the tall rear block).
+    Front pod: only the part inside the spine's outline (its upper edge is
+    already the car's outline), i.e. where the outline is below the spine top."""
+    rear, e1 = pod_outline(P["rear_axle_x"])
+    front, e2 = pod_outline(P["front_axle_x"])
+    top = 2 * P["spine_r"]
+    below = front[:, 1] <= top + 1e-9
+    # the loop starts on the upper tangent; rotate so the below-the-spine run is contiguous
+    k = int(np.argmax(~below))
+    rolled = np.roll(front[:-1], -k, axis=0)
+    keep = rolled[:, 1] <= top + 1e-9
+    i0 = int(np.argmax(keep)); i1 = len(keep) - int(np.argmax(keep[::-1]))
+    front_lower = rolled[i0:i1]
+    return dict(rear=rear.tolist(), front_lower=front_lower.tolist(), max_sdf_error=max(e1, e2))
+
+
 def silhouette(zs, ys, xs):
     """Back-view silhouette: is any x along the line of sight inside the wood?"""
     Z, Y = np.meshgrid(zs, ys, indexing="ij")
@@ -88,6 +134,14 @@ def analytic_mask(zs, ys, top_curve):
 
 
 def main(out_path):
+    if len(sys.argv) > 2 and sys.argv[2] == "pods":       # quick update: pods only
+        with open(out_path) as fh:
+            res = json.load(fh)
+        res["pods"] = pods()
+        with open(out_path, "w") as fh:
+            json.dump(res, fh, indent=1)
+        print("pods: max SDF error on outline", res["pods"]["max_sdf_error"])
+        return
     c = crease()
     top = pod_top_curve()
     # Whole back-view silhouette vs the drawn outline (rear pod/housing region holds every part's extent;
@@ -107,6 +161,7 @@ def main(out_path):
     zs_w = zs[model.any(axis=1)]
     ys_h = ys[model.any(axis=0)]
     res = dict(
+        pods=pods(),
         crease=c,
         pod_top=top,
         P={k: v for k, v in P.items() if not isinstance(v, tuple)},
