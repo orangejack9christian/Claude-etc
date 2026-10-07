@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600&family=IBM+Plex+Mono:wght@400;500&family=Source+Sans+3:wght@400;600&display=swap">
 <style>
-/* Layout: a narrow column for calibrating, then a full-width scroller that holds the 14 x 8.5 in sheet at the calibrated scale. */
+/* Layout: a narrow column for calibrating, then a full-width scroller that holds both 14 x 8.5 in sheets at the calibrated scale. */
 :root {
   --bg: #e8edeb;
   --surface: #f5f8f7;
@@ -203,6 +203,8 @@ details[open] summary { margin-bottom: 8px; }
 }
 .sheet-inner { padding: 18px 28px 28px; width: max-content; }
 .sheet-ruler { display: block; overflow: visible; margin-bottom: 4px; }
+.sheet-label { margin: 0 0 6px; font: 500 0.78rem/1.2 var(--f-data); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.sheet + .sheet-label { margin-top: 28px; }
 .sheet img {
   display: block;
   max-width: none;
@@ -306,12 +308,16 @@ details[open] summary { margin-bottom: 8px; }
   <div class="section-head">
     <h2 id="sheet-h"><span class="step">2</span>The drawing, full size</h2>
   </div>
-  <p class="hint">The 14 × 8.5 in sheet, cartridge hole on the right in both views. Scroll sideways to see all of it. To check the calibration, hold a ruler to the 1-inch square at the bottom and the 12" overall length.</p>
+  <p class="hint">Two 14 × 8.5 in sheets. Sheet 1 has the top and side views with the cartridge hole on the right; sheet 2 has the back view. Scroll sideways to see all of a sheet. To check the calibration, hold a ruler to the 1-inch square on either sheet or to the 12" overall length.</p>
 </section>
 <div class="sheet-scroll" tabindex="0" aria-label="Drawing at true size, scrollable">
   <div class="sheet-inner">
-    <svg class="sheet-ruler" id="sheet-ruler" aria-hidden="true"></svg>
-    <div class="sheet"><img id="sheet-img" src="drawing.svg" alt="CO2 dragster working drawing, top and side views, cartridge hole on the right, 12 inches overall length" width="1344" height="816"></div>
+    <p class="sheet-label">Sheet 1 · top and side views</p>
+    <svg class="sheet-ruler" aria-hidden="true"></svg>
+    <div class="sheet"><img class="sheet-img" src="drawing.svg" alt="CO2 dragster working drawing sheet 1: top and side views, cartridge hole on the right, 12 inches overall length" width="1344" height="816"></div>
+    <p class="sheet-label">Sheet 2 · back view</p>
+    <svg class="sheet-ruler" aria-hidden="true"></svg>
+    <div class="sheet"><img class="sheet-img" src="back_view.svg" alt="CO2 dragster working drawing sheet 2: back view showing the round housing, 3/8 inch web, 1 5/8 inch axle pods and wheels" width="1344" height="816"></div>
   </div>
 </div>
 
@@ -407,12 +413,14 @@ details[open] summary { margin-bottom: 8px; }
       ? 'Any standard bank, gift or ID card is 3.370 × 2.125 in.'
       : 'Showing ' + n + ' in. Widen the window for a longer ruler (up to 6 in).';
 
-    var img = $('sheet-img');
-    img.style.width = (SHEET_W * p) + 'px';
-    img.style.height = (SHEET_H * p) + 'px';
-    var sr = $('sheet-ruler');
-    sr.style.width = (SHEET_W * p) + 'px';
-    sr.style.height = (0.5 * p) + 'px';
+    Array.prototype.forEach.call(document.querySelectorAll('.sheet-img'), function (img) {
+      img.style.width = (SHEET_W * p) + 'px';
+      img.style.height = (SHEET_H * p) + 'px';
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('.sheet-ruler'), function (sr) {
+      sr.style.width = (SHEET_W * p) + 'px';
+      sr.style.height = (0.5 * p) + 'px';
+    });
 
     var range = $('ppi-range'), num = $('ppi-num');
     range.value = p.toFixed(1);
@@ -426,7 +434,7 @@ details[open] summary { margin-bottom: 8px; }
     chip.classList.toggle('ok', state.calibrated);
   }
 
-  drawRuler($('sheet-ruler'), SHEET_W, 0.5, 'bottom');
+  Array.prototype.forEach.call(document.querySelectorAll('.sheet-ruler'), function (sr) { drawRuler(sr, SHEET_W, 0.5, 'bottom'); });
 
   $('ppi-range').addEventListener('input', function (e) { setPpi(parseFloat(e.target.value)); });
   $('ppi-num').addEventListener('change', function (e) {

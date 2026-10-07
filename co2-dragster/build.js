@@ -1,8 +1,18 @@
-// Mirror the top and side views left-to-right about the page centerline,
-// keeping lettering readable, then print a true-size 14 x 8.5 in PDF.
+// Build the working drawing:
+//  sheet 1: the original top and side views mirrored left-to-right (cartridge on
+//           the right, lettering still readable), wheel projection lines, and the
+//           edge where the round tube meets the 3/8" web, from the math model.
+//  sheet 2: the back view, drawn from the math model (back_view.js).
+// Output: a true-size 14 x 8.5 in two-page PDF plus one SVG per sheet.
+//
+// Usage: node build.js <original.svg> <drawing_geom.json> <out dir>
 const { chromium } = require('playwright');
 const fs = require('fs');
-const [, , inSvg, outSvg, outPdf] = process.argv;
+const path = require('path');
+const BV = require('./back_view');
+
+const [, , inSvg, geomPath, outDir] = process.argv;
+const geom = JSON.parse(fs.readFileSync(geomPath, 'utf8'));
 
 (async () => {
   const browser = await chromium.launch();
@@ -10,7 +20,16 @@ const [, , inSvg, outSvg, outPdf] = process.argv;
   const svgText = fs.readFileSync(inSvg, 'utf8').replace(/^<\?xml[^>]*>\s*/, '');
   await page.setContent(`<!doctype html><html><body style="margin:0">${svgText}</body></html>`);
 
-  const out = await page.evaluate(() => {
+  const extras = {
+    crease: BV.sheet1Crease(geom),
+    leaderTo: BV.crossAt(geom, 3.667),
+    marker: BV.text(324, 23.6, 'SHEET 1 OF 2  ·  back view on sheet 2', { size: 7.5, fill: '#000' }),
+    note: ['edge where the round tube meets', 'the 3/8" flat web under it', '(23/32" up at the rear; back view: sheet 2)']
+      .map((s, i) => BV.text(306, 360 + i * 8.5, s, { size: 7 })).join(''),
+    blue: BV.BLUE,
+  };
+
+  const out = await page.evaluate((extras) => {
     const NS = 'http://www.w3.org/2000/svg';
     const svg = document.querySelector('svg');
     const AXIS2 = 1008; // 2 x page center (504 pt = 7 in)
@@ -117,23 +136,44 @@ const [, , inSvg, outSvg, outPdf] = process.argv;
     const after = sideBody.el.parentNode; // the mirror wrapper
     after.parentNode.insertBefore(proj, after.nextSibling);
 
-    const fmt = it => `${it.isText ? 'text' : 'path'} x ${it.x0.toFixed(1)}-${it.x1.toFixed(1)} y ${it.y0.toFixed(1)}-${it.y1.toFixed(1)}`;
+    // The edge where the round tube meets the 3/8" web (from the math model),
+    // drawn over the side-view body, plus its note and the sheet marker.
+    const add = (html, before) => {
+      const g = document.createElementNS(NS, 'g');
+      g.innerHTML = html;
+      if (before) before.parentNode.insertBefore(g, before); else svg.appendChild(g);
+      return g;
+    };
+    add(extras.crease, proj.nextSibling);
+    const noteG = add(extras.note);
+    const first = noteG.querySelector('text').getBBox();
+    const [tx, ty] = extras.leaderTo;
+    const lead = document.createElementNS(NS, 'path');
+    lead.setAttribute('d', `M ${(first.x + first.width + 2.5).toFixed(2)} ${(first.y + first.height / 2).toFixed(2)} L ${tx.toFixed(2)} ${ty.toFixed(2)}`);
+    Object.entries({ fill: 'none', stroke: extras.blue, 'stroke-width': '0.4' }).forEach(([k, v]) => lead.setAttribute(k, v));
+    noteG.appendChild(lead);
+    add(extras.marker);
+
     return {
       svg: new XMLSerializer().serializeToString(svg),
-      kept: kept.map(fmt),
-      counts: { projection: nProj, moved: moved.length, kept: kept.length, blocks: blocks.size, lines: lines.size, texts: texts.length },
+      counts: { projection: nProj, moved: moved.length, kept: kept.length, blocks: blocks.size, texts: texts.length },
     };
-  });
+  }, extras);
 
-  fs.writeFileSync(outSvg, '<?xml version="1.0" encoding="UTF-8"?>\n' + out.svg);
+  const sheet1 = out.svg;
+  const sheet2 = BV.buildSheet2(geom);
+  fs.mkdirSync(outDir, { recursive: true });
+  fs.writeFileSync(path.join(outDir, 'drawing.svg'), '<?xml version="1.0" encoding="UTF-8"?>\n' + sheet1);
+  fs.writeFileSync(path.join(outDir, 'back_view.svg'), '<?xml version="1.0" encoding="UTF-8"?>\n' + sheet2);
   console.log(JSON.stringify(out.counts));
-  console.log(out.kept.join('\n'));
 
   const pdfPage = await browser.newPage();
   await pdfPage.setContent(`<!doctype html><html><head><title>CO2 Dragster - Working Drawing</title>
-<style>@page{size:14in 8.5in;margin:0}html,body{margin:0}svg{display:block;width:14in;height:8.5in}</style>
-</head><body>${out.svg}</body></html>`);
-  await pdfPage.pdf({ path: outPdf, width: '14in', height: '8.5in', printBackground: true,
-    margin: { top: 0, right: 0, bottom: 0, left: 0 }, preferCSSPageSize: true });
+<style>@page{size:14in 8.5in;margin:0}html,body{margin:0}
+.sheet{width:14in;height:8.5in;overflow:hidden}.sheet+.sheet{break-before:page}
+.sheet svg{display:block;width:14in;height:8.5in}</style>
+</head><body><div class="sheet">${sheet1}</div><div class="sheet">${sheet2}</div></body></html>`);
+  await pdfPage.pdf({ path: path.join(outDir, 'working_drawing.pdf'), width: '14in', height: '8.5in',
+    printBackground: true, margin: { top: 0, right: 0, bottom: 0, left: 0 }, preferCSSPageSize: true });
   await browser.close();
 })();
