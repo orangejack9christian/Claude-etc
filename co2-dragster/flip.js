@@ -75,15 +75,53 @@ const [, , inSvg, outSvg, outPdf] = process.argv;
     for (const it of moved.filter(it => !it.isText)) {
       const g = document.createElementNS(NS, 'g');
       g.setAttribute('transform', `matrix(-1 0 0 1 ${AXIS2} 0)`);
-      if (it.y0 < 53) g.setAttribute('clip-path', 'url(#below-header)');
+      const isCenterline = (it.el.getAttribute('stroke-dasharray') || '').startsWith('5 1 1 1');
+      if (it.y0 < 53 && isCenterline) g.setAttribute('clip-path', 'url(#below-header)');
       it.el.parentNode.insertBefore(g, it.el);
       g.appendChild(it.el);
     }
+    // The front axle end now sits under the header notes. Move the two note
+    // lines up so the axle end clears them.
+    for (const it of kept.filter(it => it.isText && it.x1 < 900)) {
+      const dy = it.y0 > 30 && it.y1 < 41 ? -4.5 : it.y0 > 43 && it.y1 < 54 ? -7.5 : 0;
+      if (!dy) continue;
+      const t = it.el.getAttribute('transform');
+      it.el.setAttribute('transform', `translate(0 ${dy})` + (t ? ' ' + t : ''));
+    }
+
+    // Projection lines: carry the front and back of each side-view wheel up to
+    // the top-view wheels. They cross the side-view body and break around labels.
+    const WHEEL_R = 58.5, AXLES = [108, 828], Y_TOP = 220, Y_BOT = 387, PAD = 2;
+    const boxes = [...svg.children].filter(e => e.tagName === 'g' && e.querySelector('use'))
+      .map(e => e.getBoundingClientRect());
+    const sideBody = moved.find(it => !it.isText && it.y0 > 280 && it.x1 - it.x0 > 800 &&
+      (it.el.getAttribute('fill') || '').startsWith('rgb(96'));
+    const proj = document.createElementNS(NS, 'g');
+    Object.entries({ fill: 'none', stroke: 'rgb(62%, 62%, 62%)', 'stroke-width': '0.35' })
+      .forEach(([k, v]) => proj.setAttribute(k, v));
+    let nProj = 0;
+    for (const ax of AXLES) for (const x of [ax - WHEEL_R, ax + WHEEL_R]) {
+      const cuts = boxes.filter(b => x > b.left - PAD && x < b.right + PAD)
+        .map(b => [b.top - PAD, b.bottom + PAD]).sort((a, b) => a[0] - b[0]);
+      let y = Y_TOP, d = '';
+      for (const [c0, c1] of cuts) {
+        if (c1 <= y || c0 >= Y_BOT) continue;
+        if (c0 > y) d += `M ${x} ${y} L ${x} ${c0} `;
+        y = Math.max(y, c1);
+      }
+      if (y < Y_BOT) d += `M ${x} ${y} L ${x} ${Y_BOT}`;
+      const path = document.createElementNS(NS, 'path');
+      path.setAttribute('d', d.trim());
+      proj.appendChild(path); nProj++;
+    }
+    const after = sideBody.el.parentNode; // the mirror wrapper
+    after.parentNode.insertBefore(proj, after.nextSibling);
+
     const fmt = it => `${it.isText ? 'text' : 'path'} x ${it.x0.toFixed(1)}-${it.x1.toFixed(1)} y ${it.y0.toFixed(1)}-${it.y1.toFixed(1)}`;
     return {
       svg: new XMLSerializer().serializeToString(svg),
       kept: kept.map(fmt),
-      counts: { moved: moved.length, kept: kept.length, blocks: blocks.size, lines: lines.size, texts: texts.length },
+      counts: { projection: nProj, moved: moved.length, kept: kept.length, blocks: blocks.size, lines: lines.size, texts: texts.length },
     };
   });
 
