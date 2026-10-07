@@ -84,6 +84,12 @@ function buildSheet2(geom) {
       `fill="rgb(55%, 55%, 55%)" stroke="${INK}" stroke-width="0.6"/>`);
   }
 
+  // --- the S-curve swoop seen from behind: wider than the housing just below its centre, so it
+  // shows between the pod tops and the housing. Drawn first; the body covers the rest of it.
+  const sw = geom.swoop_back;
+  const swPath = 'M ' + [...sw.map(([z, y]) => P_(z, y)), ...sw.slice().reverse().map(([z, y]) => P_(-z, y))].join(' L ') + ' Z';
+  add(`<path d="${swPath}" fill="${TAN}" stroke="${INK}" stroke-width="1.1" stroke-linejoin="round"/>`);
+
   // --- body, then the edges of the flat rear face of the web (it sits in front of the pods)
   add(`<path d="${pts.join(' ')}" fill="${TAN}" stroke="${INK}" stroke-width="1.1" stroke-linejoin="round"/>`);
   const filTop = fil.length ? fil[0][1] : podTop;
@@ -99,14 +105,18 @@ function buildSheet2(geom) {
   add(`<circle cx="${f(px(0))}" cy="${f(py(cy))}" r="${f(0.14 * 72)}" fill="none" stroke="${INK}" stroke-width="0.9"/>`);
 
   // --- screw eye under the car (the guide line runs through the ring)
-  add(`<circle cx="${f(px(0))}" cy="${f(py(-0.14))}" r="6.12" fill="none" stroke="${INK}" stroke-width="0.9"/>`);
-  add(line(px(0), py(-0.055), px(0), py(0), INK, 0.9));
+  const eyeOut = 0.065 + 0.018, eyeIn = 0.065 - 0.018;
+  add(`<path d="M ${f(px(eyeOut))} ${f(py(-0.14))} A ${f(eyeOut * 72)} ${f(eyeOut * 72)} 0 1 0 ${f(px(-eyeOut))} ${f(py(-0.14))} ` +
+    `A ${f(eyeOut * 72)} ${f(eyeOut * 72)} 0 1 0 ${f(px(eyeOut))} ${f(py(-0.14))} Z M ${f(px(eyeIn))} ${f(py(-0.14))} ` +
+    `A ${f(eyeIn * 72)} ${f(eyeIn * 72)} 0 1 1 ${f(px(-eyeIn))} ${f(py(-0.14))} A ${f(eyeIn * 72)} ${f(eyeIn * 72)} 0 1 1 ${f(px(eyeIn))} ${f(py(-0.14))} Z" ` +
+    `fill="rgb(55%, 55%, 55%)" fill-rule="evenodd" stroke="${INK}" stroke-width="0.7"/>`);
+  for (const s of [-1, 1]) add(line(px(s * 0.02), py(-0.14 + eyeOut), px(s * 0.02), py(0), INK, 0.7));
 
   // --- centerlines
   const dashdot = ' stroke-dasharray="5 1 1 1"';
   add(line(px(0), py(-0.62), px(0), py(2.0), CENTER, 0.5, dashdot));
   add(line(px(-0.75), py(cy), px(0.75), py(cy), CENTER, 0.5, dashdot));
-  add(line(px(-1.36), py(P.axle_y), px(1.36), py(P.axle_y), CENTER, 0.5, dashdot));
+  add(line(px(-1.32), py(P.axle_y), px(1.32), py(P.axle_y), CENTER, 0.5, dashdot));
 
   // --- dimensions
   const ext = (x1, y1, x2, y2) => add(line(x1, y1, x2, y2, BLUE, 0.4));
@@ -156,7 +166,7 @@ function buildSheet2(geom) {
   note(-0.98, 1.44, ['1 1/8" round housing', '(3/16" wall around the hole)'],
     [hr * Math.cos(a200), cy + hr * Math.sin(a200)]);
   note(-1.30, 0.92, ['wheel: 1 5/8" dia x 5/16" wide', '(width ASSUMED - measure yours)'], [-zout, 0.95]);
-  note(-1.40, 0.50, ['1/8" axle, 2 1/2" long', '3/16" hole through the pods (hidden)'], [-axEnd, P.axle_y]);
+  note(-1.48, 0.50, ['1/8" axle, 2 1/2" long', '3/16" hole through the pods (hidden)'], [-axEnd, P.axle_y]);
   add(text(px(-0.50), py(0.07), 'axle pod', { size: 6.5, anchor: 'middle' }));
   add(text(px(0.13), py(-0.16), 'screw eye', { size: 6.5 }));
 
@@ -174,8 +184,8 @@ function buildSheet2(geom) {
   add(text(561.6, 568.6, 'square', { size: 6.5, fill: '#000', anchor: 'middle' }));
 
   add(`<rect x="720" y="507.6" width="270" height="90" fill="none" stroke="${INK}" stroke-width="1"/>`);
-  const rows = [['Name:', 'Christian Kidwell'], ['Section:', '________________'], ['Date:', '10/2/2026'],
-    ['Sheet:', '2 of 2 (back view)'], ['Scale:', '1:1 (full size)']];
+  const rows = [['Name:', 'Christian Kidwell'], ['Section:', '________________'], ['Date:', '10/7/2026'],
+    ['Sheet:', '2 of 2 (back view), scale 1:1'], ['Material:', 'balsa, one piece']];
   rows.forEach(([k, v], i) => {
     const y = 525.4 + i * 17.3;
     add(text(727.2, y, k, { fill: '#000', bold: true }));

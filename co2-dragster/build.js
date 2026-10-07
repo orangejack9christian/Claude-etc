@@ -28,6 +28,8 @@ const geom = JSON.parse(fs.readFileSync(geomPath, 'utf8'));
     note: ['edge where the round tube meets', 'the 3/8" flat web under it', '(23/32" up at the rear; back view: sheet 2)']
       .map((s, i) => BV.text(306, 360 + i * 8.5, s, { size: 7 })).join(''),
     blue: BV.BLUE,
+    ink: BV.INK,
+    rev: BV.text(470, 33.6, 'Rev B 10/7/2026: flipped; added projection lines, tube/web edge, pod outlines, edge-on screw eyes, sheet 2', { size: 6.5, fill: '#000' }),
   };
 
   const out = await page.evaluate((extras) => {
@@ -77,7 +79,11 @@ const geom = JSON.parse(fs.readFileSync(geomPath, 'utf8'));
       const y0 = Math.min(...members.map(m => m.y0));
       // Mirrored, the axle-hole leader would cross the start of the
       // "teardrop axle pods" note, so that note sits 1/4" further right.
-      const nudge = x0 > 750 && x0 < 760 && y0 > 305 && y0 < 315 ? 18 : 0;
+      // Mirrored, the '1' of the 1 3/4" dimension lands on the rear axle centerline; move it 10 pt along its line.
+      const nudge = x0 > 750 && x0 < 760 && y0 > 305 && y0 < 315 ? 18
+        : x0 > 155 && x0 < 165 && y0 > 225 && y0 < 235 ? 10
+        // NOSE label: keep it clear of the left page edge, just inside the nose line.
+        : x0 > 970 && x0 < 980 && y0 > 450 && y0 < 458 ? 26 : 0;
       const dx = AXIS2 - x0 - x1 + nudge;
       for (const m of members) {
         const t = m.el.getAttribute('transform');
@@ -92,11 +98,17 @@ const geom = JSON.parse(fs.readFileSync(geomPath, 'utf8'));
     Object.entries({ x: -2000, y: 53.6, width: 5000, height: 2000 }).forEach(([k, v]) => cr.setAttribute(k, v));
     clip.appendChild(cr);
     svg.querySelector('defs').appendChild(clip);
+    // The nudged pod note sits just above the front axle's side-view centerline; start that line below it.
+    const clip2 = clip.cloneNode(true);
+    clip2.id = 'below-pod-note';
+    clip2.firstChild.setAttribute('y', '324.5');
+    svg.querySelector('defs').appendChild(clip2);
     for (const it of moved.filter(it => !it.isText)) {
       const g = document.createElementNS(NS, 'g');
       g.setAttribute('transform', `matrix(-1 0 0 1 ${AXIS2} 0)`);
       const isCenterline = (it.el.getAttribute('stroke-dasharray') || '').startsWith('5 1 1 1');
       if (it.y0 < 53 && isCenterline) g.setAttribute('clip-path', 'url(#below-header)');
+      if (isCenterline && Math.abs(it.x0 - 900) < 1 && Math.abs(it.y0 - 321.3) < 2) g.setAttribute('clip-path', 'url(#below-pod-note)');
       it.el.parentNode.insertBefore(g, it.el);
       g.appendChild(it.el);
     }
@@ -155,10 +167,36 @@ const geom = JSON.parse(fs.readFileSync(geomPath, 'utf8'));
     Object.entries({ fill: 'none', stroke: extras.blue, 'stroke-width': '0.4' }).forEach(([k, v]) => lead.setAttribute(k, v));
     noteG.appendChild(lead);
     add(extras.marker);
+    add(extras.rev);
+
+    // Screw eyes: the ring faces the guide line (render.py puts it in the y-z plane), so it is round
+    // only in the back view. Show it edge-on here: a 0.036" x 0.166" bar, hidden (dashed) in the top view.
+    let nEyes = 0;
+    for (const it of moved.filter(it => !it.isText)) {
+      const w = it.x1 - it.x0, hgt = it.y1 - it.y0;
+      if (Math.abs(w - 12.24) > 0.6 || Math.abs(hgt - 12.24) > 0.6) continue;
+      const side = Math.abs(it.y0 - 417.96) < 1, top = Math.abs(it.y0 - 130.68) < 1;
+      if (!side && !top) continue;
+      const cx = AXIS2 - (it.x0 + it.x1) / 2, cy = (it.y0 + it.y1) / 2;
+      const bar = document.createElementNS(NS, 'rect');
+      Object.entries({ x: (cx - 1.3).toFixed(2), y: (cy - 5.98).toFixed(2), width: '2.6', height: '11.95',
+        fill: side ? 'rgb(55%, 55%, 55%)' : 'none', stroke: side ? extras.ink : 'rgb(20%, 20%, 20%)',
+        'stroke-width': side ? '0.6' : '0.7', ...(top ? { 'stroke-dasharray': '1.4 1.05' } : {}) })
+        .forEach(([k, v]) => bar.setAttribute(k, v));
+      it.el.parentNode.replaceWith(bar);
+      nEyes++;
+    }
+
+    // Slide the whole sheet 8 pt left: the mirrored dimensions sat 0.16" from the right edge,
+    // closer than many printers can print. Scale is unchanged.
+    const shift = document.createElementNS(NS, 'g');
+    shift.setAttribute('transform', 'translate(-8 0)');
+    for (const n of [...svg.childNodes]) if (n.nodeName !== 'defs') shift.appendChild(n);
+    svg.appendChild(shift);
 
     return {
       svg: new XMLSerializer().serializeToString(svg),
-      counts: { projection: nProj, moved: moved.length, kept: kept.length, blocks: blocks.size, texts: texts.length },
+      counts: { eyes: nEyes, projection: nProj, moved: moved.length, kept: kept.length, blocks: blocks.size, texts: texts.length },
     };
   }, extras);
 

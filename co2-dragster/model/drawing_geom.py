@@ -4,7 +4,8 @@
   meet the round tube (housing + S-curve swoop), from the rear face to the end
   of the swoop.
 - back view: the outline seen from behind (housing circle, web, axle pods with
-  their fillets), checked against the model's own silhouette.
+  their fillets, and the S-curve swoop, which shows below the housing),
+  checked against the model's own silhouette.
 
 Run:  python drawing_geom.py out.json
 """
@@ -94,6 +95,29 @@ def pods():
     return dict(rear=rear.tolist(), front_lower=front_lower.tolist(), max_sdf_error=max(e1, e2))
 
 
+def swoop_back_profile(step=0.0025):
+    """Half-width of the S-curve swoop seen from behind, at each height.
+    Each swoop segment is a round cone between two spheres on the centerline,
+    so seen from behind it is the 2D hull of two circles centred at z = 0."""
+    xs, ys, rs = D.swoop_curve()
+    cs = [((0.0, ys[i]), (0.0, ys[i + 1]), rs[i], rs[i + 1]) for i in range(len(xs) - 1)]
+
+    def inside(z, y):
+        q = np.array([[z, y]])
+        return min(D.round_cone(q, a, b, ra, rb)[0] for a, b, ra, rb in cs) <= 0
+
+    out = []
+    for y in np.arange(0.0, P["cart_y"] + P["housing_r"] + 1e-9, step):
+        if not inside(0.0, y):
+            continue
+        lo, hi = 0.0, 1.0
+        for _ in range(40):
+            mid = (lo + hi) / 2
+            lo, hi = (mid, hi) if inside(mid, y) else (lo, mid)
+        out.append((float(lo), float(y)))
+    return out
+
+
 def silhouette(zs, ys, xs):
     """Back-view silhouette: is any x along the line of sight inside the wood?"""
     Z, Y = np.meshgrid(zs, ys, indexing="ij")
@@ -120,8 +144,8 @@ def pod_top_curve():
     return out
 
 
-def analytic_mask(zs, ys, top_curve):
-    """The outline as drawn: housing circle + web + pods (with the measured fillet curve)."""
+def analytic_mask(zs, ys, top_curve, swoop):
+    """The outline as drawn: housing circle + web + pods (with the measured fillet curve) + swoop."""
     Z, Y = np.meshgrid(zs, ys, indexing="ij")
     cy, hr, ph = P["cart_y"], P["housing_r"], P["pod_halfwidth"]
     circle = (Z ** 2 + (Y - cy) ** 2) <= hr ** 2
@@ -130,27 +154,32 @@ def analytic_mask(zs, ys, top_curve):
     ty = np.array([t[1] for t in top_curve])
     pod_top = np.where(np.abs(Z) <= tz[-1], np.interp(np.abs(Z), tz, ty), P["axle_y"] + P["pod_r"])
     pod = (np.abs(Z) <= ph) & (Y >= 0) & (Y <= pod_top)
-    return circle | web | pod
+    sw = np.array(swoop)
+    swoop_mask = np.abs(Z) <= np.interp(Y, sw[:, 1], sw[:, 0], left=-1, right=-1)
+    return circle | web | pod | swoop_mask
 
 
 def main(out_path):
-    if len(sys.argv) > 2 and sys.argv[2] == "pods":       # quick update: pods only
+    if len(sys.argv) > 2 and sys.argv[2] == "pods":       # quick update: pods + swoop profile, no check
         with open(out_path) as fh:
             res = json.load(fh)
         res["pods"] = pods()
+        res["swoop_back"] = swoop_back_profile()
         with open(out_path, "w") as fh:
             json.dump(res, fh, indent=1)
         print("pods: max SDF error on outline", res["pods"]["max_sdf_error"])
         return
     c = crease()
     top = pod_top_curve()
-    # Whole back-view silhouette vs the drawn outline (rear pod/housing region holds every part's extent;
-    # the front pod is identical and the swoop and spine sit inside the housing circle and web)
-    zs = np.arange(-0.86, 0.86, 0.004)
-    ys = np.arange(-0.02, 1.86, 0.004)
-    xs = np.r_[np.arange(0.0, 2.4, 0.01), np.arange(9.9, 11.5, 0.01)]
+    sw = swoop_back_profile()
+    # Whole back-view silhouette vs the drawn outline. Every part that can show from behind lies in
+    # x 0..5.6 (housing, swoop, web, rear pod) or 9.9..11.5 (front pod); past the swoop the spine
+    # sits inside the web.
+    zs = np.arange(-0.86, 0.86, 0.005)
+    ys = np.arange(-0.02, 1.86, 0.005)
+    xs = np.r_[np.arange(0.0, 5.6, 0.01), np.arange(9.9, 11.5, 0.01)]
     model = silhouette(zs, ys, xs)
-    drawn = analytic_mask(zs, ys, top)
+    drawn = analytic_mask(zs, ys, top, sw)
     diff = model ^ drawn
     # Disagreements within 1 grid cell of an edge are sampling noise; report the rest
     from_edge = np.zeros_like(diff)
@@ -161,6 +190,7 @@ def main(out_path):
     zs_w = zs[model.any(axis=1)]
     ys_h = ys[model.any(axis=0)]
     res = dict(
+        swoop_back=sw,
         pods=pods(),
         crease=c,
         pod_top=top,
@@ -171,8 +201,8 @@ def main(out_path):
             silhouette_cells=int(model.sum()),
             mismatch_cells=int(diff.sum()),
             mismatch_away_from_edges=int(real.sum()),
-            width=float(zs_w.max() - zs_w.min() + 0.004),
-            height=float(ys_h.max() - ys_h.min() + 0.004),
+            width=float(zs_w.max() - zs_w.min() + 0.005),
+            height=float(ys_h.max() - ys_h.min() + 0.005),
             crease_at_rear=c[0][1],
             crease_at_swoop_start=float(np.interp(P["housing_len"], [p[0] for p in c], [p[1] for p in c])),
             crease_at_end=c[-1][1],
