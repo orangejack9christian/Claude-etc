@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>body{margin:0}[hidden]{display:none!important}img{max-width:100%}</style>
+<title>Dragster True-Size Viewer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600&family=IBM+Plex+Mono:wght@400;500&family=Source+Sans+3:wght@400;600&display=swap">
+<style>
+/* Layout: a narrow column for calibrating, then a full-width scroller that holds the 14 x 8.5 in sheet at the calibrated scale. */
+:root {
+  --bg: #e8edeb;
+  --surface: #f5f8f7;
+  --ink: #1b2321;
+  --muted: #56635f;
+  --line: #c2ccc9;
+  --accent: #1c58b8;
+  --accent-wash: rgba(28, 88, 184, 0.08);
+  --grid: rgba(28, 88, 184, 0.13);
+  --good: #1d7346;
+  --good-wash: rgba(29, 115, 70, 0.12);
+  --warn: #8f5300;
+  --warn-wash: rgba(176, 108, 0, 0.14);
+  --paper: #ffffff;
+  --paper-edge: rgba(27, 35, 33, 0.18);
+  --f-display: "Barlow Condensed", "Arial Narrow", system-ui, sans-serif;
+  --f-body: "Source Sans 3", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-data: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --ppi: 96px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111615; --surface: #19211f; --ink: #e1e8e6; --muted: #98a7a3; --line: #2e3a37;
+    --accent: #85b2ff; --accent-wash: rgba(133, 178, 255, 0.10); --grid: rgba(133, 178, 255, 0.12);
+    --good: #6fd29a; --good-wash: rgba(111, 210, 154, 0.13); --warn: #f0b45c; --warn-wash: rgba(240, 180, 92, 0.15);
+    --paper: #ffffff; --paper-edge: rgba(0, 0, 0, 0.6);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111615; --surface: #19211f; --ink: #e1e8e6; --muted: #98a7a3; --line: #2e3a37;
+  --accent: #85b2ff; --accent-wash: rgba(133, 178, 255, 0.10); --grid: rgba(133, 178, 255, 0.12);
+  --good: #6fd29a; --good-wash: rgba(111, 210, 154, 0.13); --warn: #f0b45c; --warn-wash: rgba(240, 180, 92, 0.15);
+  --paper: #ffffff; --paper-edge: rgba(0, 0, 0, 0.6);
+  color-scheme: dark;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font: 400 1rem/1.55 var(--f-body);
+  padding-inline: clamp(16px, 3vw, 32px);
+  padding-block: 28px 56px;
+}
+.wrap { max-width: 1080px; margin-inline: auto; display: grid; gap: 28px; }
+.eyebrow {
+  font: 500 0.75rem/1.2 var(--f-data);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 8px;
+}
+h1 {
+  font: 600 clamp(2rem, 4.4vw, 2.9rem)/1.02 var(--f-display);
+  letter-spacing: 0.005em;
+  margin: 0 0 12px;
+  text-wrap: balance;
+}
+.lede { margin: 0; max-width: 64ch; color: var(--ink); }
+.lede + .lede { margin-top: 8px; color: var(--muted); }
+h2 {
+  font: 600 1.55rem/1.1 var(--f-display);
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  text-wrap: balance;
+}
+.step {
+  font: 500 0.8rem/1 var(--f-data);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 4px 8px;
+  transform: translateY(-3px);
+}
+.section-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; }
+.hint { margin: 0; color: var(--muted); max-width: 64ch; font-size: 0.95rem; }
+
+/* Status chip */
+.chip {
+  font: 500 0.78rem/1 var(--f-data);
+  letter-spacing: 0.04em;
+  padding: 7px 10px;
+  border-radius: 999px;
+  display: inline-flex; align-items: center; gap: 7px;
+  background: var(--warn-wash); color: var(--warn);
+}
+.chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.chip.ok { background: var(--good-wash); color: var(--good); }
+
+/* Calibration */
+.cal { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 340px); gap: 20px; align-items: start; }
+@media (max-width: 780px) { .cal { grid-template-columns: minmax(0, 1fr); } }
+.target {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background-color: var(--surface);
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: calc(var(--ppi) / 4) calc(var(--ppi) / 4);
+  background-position: 27px 27px;
+  overflow: auto;
+}
+.target-inner { padding: 28px; box-sizing: border-box; }
+.target svg { display: block; overflow: visible; }
+.card-outline { fill: var(--accent-wash); stroke: var(--accent); stroke-width: 1.5; }
+.card-chip { fill: none; stroke: var(--accent); stroke-width: 1; opacity: 0.5; }
+.card-text { fill: var(--muted); font-family: var(--f-body); }
+.cross { stroke: var(--accent); stroke-width: 1; }
+.r-base { stroke: var(--ink); stroke-width: 1.25; }
+.r-tick { stroke: var(--ink); stroke-width: 1; }
+.r-tick.major { stroke-width: 1.5; }
+.r-num { fill: var(--ink); font-family: var(--f-data); }
+.r-end { stroke: var(--accent); stroke-width: 1.5; }
+.target-note { margin: 0; padding: 0 28px 18px; font-size: 0.9rem; color: var(--muted); }
+
+.panel {
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 18px;
+  display: grid;
+  gap: 16px;
+}
+.label {
+  font: 500 0.72rem/1.2 var(--f-data);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 6px;
+}
+.seg { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg button {
+  font: 600 0.95rem/1 var(--f-body);
+  padding: 10px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+}
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--surface); }
+input[type="range"] { width: 100%; accent-color: var(--accent); margin: 4px 0 0; }
+.nudges { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.btn {
+  font: 500 0.85rem/1 var(--f-data);
+  padding: 9px 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--ink);
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--surface); font-family: var(--f-body); font-weight: 600; padding-inline: 14px; }
+.btn.quiet { background: transparent; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.num {
+  width: 7.5ch;
+  font: 500 1rem/1 var(--f-data);
+  padding: 8px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.unit { color: var(--muted); font-size: 0.9rem; }
+.readout { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; align-items: baseline; }
+.readout dt { color: var(--muted); font-size: 0.9rem; }
+.readout dd { margin: 0; font: 500 0.95rem/1.3 var(--f-data); font-variant-numeric: tabular-nums; text-align: right; }
+.readout dd.big { font-size: 1.15rem; color: var(--accent); }
+.small { font-size: 0.85rem; color: var(--muted); margin: 0; }
+.divider { border: 0; border-top: 1px solid var(--line); margin: 0; }
+details summary { cursor: pointer; font-weight: 600; }
+details[open] summary { margin-bottom: 8px; }
+
+/* Sheet */
+.sheet-section { display: grid; gap: 14px; max-width: 1080px; margin-inline: auto; margin-top: 36px; }
+.sheet-scroll {
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  margin-top: 14px;
+}
+.sheet-inner { padding: 18px 28px 28px; width: max-content; }
+.sheet-ruler { display: block; overflow: visible; margin-bottom: 4px; }
+.sheet img {
+  display: block;
+  max-width: none;
+  background: var(--paper);
+  box-shadow: 0 0 0 1px var(--paper-edge), 0 6px 18px rgba(0, 0, 0, 0.12);
+}
+.foot { max-width: 1080px; margin: 28px auto 0; display: grid; gap: 6px; }
+.foot p { margin: 0; color: var(--muted); font-size: 0.9rem; max-width: 72ch; }
+@media (prefers-reduced-motion: no-preference) {
+  .btn, .seg button { transition: background-color 0.12s, border-color 0.12s, color 0.12s; }
+}
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="eyebrow">CO2 dragster · working drawing · scale 1:1 · cartridge on right</p>
+    <h1>Dragster drawing at true size</h1>
+    <p class="lede">The PDF is already exact on paper: printed at 100% on 8.5 × 14 legal, the 1-inch square measures 1 inch. A screen is different. Every monitor fits a different number of pixels into an inch, and a PDF can't tell which monitor it's on.</p>
+    <p class="lede">Match the outline below to a real card or ruler once. After that, the drawing further down shows at true size on this screen.</p>
+  </header>
+
+  <section aria-labelledby="cal-h" style="display:grid;gap:14px">
+    <div class="section-head">
+      <h2 id="cal-h"><span class="step">1</span>Calibrate this screen</h2>
+      <span class="chip" id="status" role="status">Not calibrated</span>
+    </div>
+    <p class="hint" id="howto"></p>
+
+    <div class="cal">
+      <div class="target" id="target">
+        <div class="target-inner" id="target-inner">
+          <svg id="card" viewBox="0 0 3.37 2.125" aria-label="Outline of a standard bank card, 3.370 by 2.125 inches">
+            <rect class="card-outline" x="0" y="0" width="3.37" height="2.125" rx="0.125" vector-effect="non-scaling-stroke"></rect>
+            <rect class="card-chip" x="0.32" y="0.72" width="0.46" height="0.36" rx="0.05" vector-effect="non-scaling-stroke"></rect>
+            <text class="card-text" x="1.685" y="1.12" font-size="0.15" text-anchor="middle">Lay a real card here</text>
+            <text class="card-text" x="1.685" y="1.36" font-size="0.11" text-anchor="middle">3.370 × 2.125 in</text>
+            <line class="cross" x1="-0.22" y1="0" x2="0.22" y2="0" vector-effect="non-scaling-stroke"></line>
+            <line class="cross" x1="0" y1="-0.22" x2="0" y2="0.22" vector-effect="non-scaling-stroke"></line>
+          </svg>
+          <svg id="ruler-target" hidden aria-label="On-screen ruler in inches"></svg>
+        </div>
+        <p class="target-note" id="target-note"></p>
+      </div>
+
+      <div class="panel">
+        <div>
+          <p class="label" id="mode-label">Match against</p>
+          <div class="seg" role="group" aria-labelledby="mode-label">
+            <button type="button" id="mode-card" aria-pressed="true">Bank card</button>
+            <button type="button" id="mode-ruler" aria-pressed="false">Ruler</button>
+          </div>
+        </div>
+
+        <div>
+          <label class="label" for="ppi-range">Pixels per inch</label>
+          <input type="range" id="ppi-range" min="40" max="400" step="0.1" value="96">
+          <div class="row" style="margin-top:10px">
+            <input class="num" type="number" id="ppi-num" min="40" max="400" step="0.1" value="96" aria-label="Pixels per inch">
+            <span class="unit">px = 1 in</span>
+          </div>
+        </div>
+
+        <div>
+          <p class="label">Fine adjust</p>
+          <div class="nudges">
+            <button type="button" class="btn" data-step="-1" aria-label="Smaller by 1 pixel per inch">−1</button>
+            <button type="button" class="btn" data-step="-0.1" aria-label="Smaller by 0.1 pixel per inch">−0.1</button>
+            <button type="button" class="btn" data-step="0.1" aria-label="Larger by 0.1 pixel per inch">+0.1</button>
+            <button type="button" class="btn" data-step="1" aria-label="Larger by 1 pixel per inch">+1</button>
+          </div>
+        </div>
+
+        <details>
+          <summary>Start from your screen size</summary>
+          <div class="row">
+            <input class="num" type="number" id="diag" min="5" max="100" step="0.1" placeholder="13.3" aria-label="Screen diagonal in inches">
+            <span class="unit">in diagonal</span>
+            <button type="button" class="btn primary" id="estimate">Estimate</button>
+          </div>
+          <p class="small" id="estimate-msg" style="margin-top:8px">Gets you close. Finish with the card or ruler.</p>
+        </details>
+
+        <hr class="divider">
+
+        <dl class="readout">
+          <dt>1 inch on this screen</dt><dd class="big" id="r-in">96.0 px</dd>
+          <dt>Screen density</dt><dd id="r-dens">96 ppi</dd>
+          <dt>PDF zoom for true size</dt><dd id="r-zoom">100%</dd>
+        </dl>
+        <p class="small">The zoom applies to the PDF viewer built into Chrome, Edge or Firefox, with browser zoom at 100%.</p>
+        <div class="row">
+          <button type="button" class="btn quiet" id="reset">Reset calibration</button>
+        </div>
+        <p class="small" id="save-note" hidden>This browser blocks saved settings, so you'll need to calibrate again next visit.</p>
+      </div>
+    </div>
+  </section>
+</div>
+
+<section class="sheet-section" aria-labelledby="sheet-h">
+  <div class="section-head">
+    <h2 id="sheet-h"><span class="step">2</span>The drawing, full size</h2>
+  </div>
+  <p class="hint">The 14 × 8.5 in sheet, cartridge hole on the right in both views. Scroll sideways to see all of it. To check the calibration, hold a ruler to the 1-inch square at the bottom and the 12" overall length.</p>
+</section>
+<div class="sheet-scroll" tabindex="0" aria-label="Drawing at true size, scrollable">
+  <div class="sheet-inner">
+    <svg class="sheet-ruler" id="sheet-ruler" aria-hidden="true"></svg>
+    <div class="sheet"><img id="sheet-img" src="drawing.svg" alt="CO2 dragster working drawing, top and side views, cartridge hole on the right, 12 inches overall length" width="1344" height="816"></div>
+  </div>
+</div>
+
+<div class="foot">
+  <p>Changing browser zoom is corrected automatically. Recalibrate if you move this window to a different monitor, and avoid pinch-zooming, which resizes the page without telling it.</p>
+  <p>Your calibration is saved in this browser only.</p>
+</div>
+
+<script>
+(function () {
+  var KEY = 'dragster-true-size-v1';
+  var CARD_W = 3.37, CARD_H = 2.125, SHEET_W = 14, SHEET_H = 8.5;
+  var MIN = 40, MAX = 400;
+  var $ = function (id) { return document.getElementById(id); };
+  var NS = 'http://www.w3.org/2000/svg';
+
+  var state = { ppi: 96, dpr: window.devicePixelRatio || 1, calibrated: false, mode: 'card' };
+  try {
+    var saved = JSON.parse(localStorage.getItem(KEY) || 'null');
+    if (saved && typeof saved.ppi === 'number' && saved.ppi >= MIN && saved.ppi <= MAX) {
+      state.ppi = saved.ppi;
+      state.dpr = saved.dpr || state.dpr;
+      state.calibrated = !!saved.calibrated;
+      state.mode = saved.mode === 'ruler' ? 'ruler' : 'card';
+    }
+  } catch (e) {}
+
+  function save() {
+    try { localStorage.setItem(KEY, JSON.stringify(state)); $('save-note').hidden = true; }
+    catch (e) { $('save-note').hidden = false; }
+  }
+
+  // CSS px per inch right now. Browser zoom changes devicePixelRatio, so scale
+  // the stored value by the ratio to keep the physical size fixed.
+  function ppiNow() { return state.ppi * state.dpr / (window.devicePixelRatio || 1); }
+
+  function setPpi(v) {
+    v = Math.min(MAX, Math.max(MIN, Math.round(v * 100) / 100));
+    state.ppi = v;
+    state.dpr = window.devicePixelRatio || 1;
+    state.calibrated = true;
+    save();
+    render();
+  }
+
+  function drawRuler(svg, inches, heightIn, edge) {
+    var h = heightIn, parts = [];
+    var baseY = edge === 'bottom' ? h : 0, dir = edge === 'bottom' ? -1 : 1;
+    parts.push('<line class="r-base" x1="0" y1="' + baseY + '" x2="' + inches + '" y2="' + baseY + '" vector-effect="non-scaling-stroke"/>');
+    for (var i = 0; i <= inches * 16; i++) {
+      var x = i / 16, len, cls = 'r-tick';
+      if (i % 16 === 0) { len = 0.3; cls += ' major'; }
+      else if (i % 8 === 0) len = 0.22;
+      else if (i % 4 === 0) len = 0.16;
+      else if (i % 2 === 0) len = 0.11;
+      else len = 0.07;
+      parts.push('<line class="' + cls + '" x1="' + x + '" y1="' + baseY + '" x2="' + x + '" y2="' + (baseY + dir * len) + '" vector-effect="non-scaling-stroke"/>');
+      if (i % 16 === 0) {
+        var ty = edge === 'bottom' ? h - 0.36 : 0.48;
+        parts.push('<text class="r-num" x="' + x + '" y="' + ty + '" font-size="0.13" text-anchor="middle">' + (i / 16) + '</text>');
+      }
+    }
+    svg.innerHTML = parts.join('');
+    svg.setAttribute('viewBox', '0 0 ' + inches + ' ' + h);
+  }
+
+  var rulerLen = 0;
+  function render() {
+    var p = ppiNow();
+    document.documentElement.style.setProperty('--ppi', p + 'px');
+
+    var card = $('card');
+    card.style.width = (CARD_W * p) + 'px';
+    card.style.height = (CARD_H * p) + 'px';
+
+    var inner = $('target-inner');
+    var avail = Math.max(0, inner.clientWidth - 56);
+    var n = Math.max(1, Math.min(6, Math.floor(avail / p)));
+    var rt = $('ruler-target');
+    if (n !== rulerLen) { drawRuler(rt, n, 0.6, 'top'); rulerLen = n; }
+    rt.style.width = (n * p) + 'px';
+    rt.style.height = (0.6 * p) + 'px';
+
+    var isCard = state.mode === 'card';
+    card.toggleAttribute('hidden', !isCard);
+    rt.toggleAttribute('hidden', isCard);
+    $('mode-card').setAttribute('aria-pressed', String(isCard));
+    $('mode-ruler').setAttribute('aria-pressed', String(!isCard));
+    $('howto').textContent = isCard
+      ? 'Hold a bank card, library card or school ID flat against the screen with its top-left corner on the crosshair. Adjust until the outline’s right and bottom edges sit exactly on the card’s edges.'
+      : 'Hold a ruler against the screen with its 0 on the on-screen 0. Adjust until the on-screen ' + n + ' lines up with ' + n + ' on your ruler. The longer the stretch you match, the more exact the result.';
+    $('target-note').textContent = isCard
+      ? 'Any standard bank, gift or ID card is 3.370 × 2.125 in.'
+      : 'Showing ' + n + ' in. Widen the window for a longer ruler (up to 6 in).';
+
+    var img = $('sheet-img');
+    img.style.width = (SHEET_W * p) + 'px';
+    img.style.height = (SHEET_H * p) + 'px';
+    var sr = $('sheet-ruler');
+    sr.style.width = (SHEET_W * p) + 'px';
+    sr.style.height = (0.5 * p) + 'px';
+
+    var range = $('ppi-range'), num = $('ppi-num');
+    range.value = p.toFixed(1);
+    if (document.activeElement !== num) num.value = p.toFixed(1);
+    $('r-in').textContent = p.toFixed(1) + ' px';
+    $('r-dens').textContent = Math.round(p * (window.devicePixelRatio || 1)) + ' ppi';
+    $('r-zoom').textContent = Math.round(p / 96 * 100) + '%';
+
+    var chip = $('status');
+    chip.textContent = state.calibrated ? 'Calibrated' : 'Not calibrated';
+    chip.classList.toggle('ok', state.calibrated);
+  }
+
+  drawRuler($('sheet-ruler'), SHEET_W, 0.5, 'bottom');
+
+  $('ppi-range').addEventListener('input', function (e) { setPpi(parseFloat(e.target.value)); });
+  $('ppi-num').addEventListener('change', function (e) {
+    var v = parseFloat(e.target.value);
+    if (isFinite(v)) setPpi(v); else render();
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('[data-step]'), function (b) {
+    b.addEventListener('click', function () { setPpi(ppiNow() + parseFloat(b.getAttribute('data-step'))); });
+  });
+  $('mode-card').addEventListener('click', function () { state.mode = 'card'; save(); render(); });
+  $('mode-ruler').addEventListener('click', function () { state.mode = 'ruler'; save(); render(); });
+  $('estimate').addEventListener('click', function () {
+    var d = parseFloat($('diag').value);
+    var msg = $('estimate-msg');
+    if (!isFinite(d) || d < 5 || d > 100) { msg.textContent = 'Enter the screen diagonal in inches, for example 13.3 or 24.'; return; }
+    setPpi(Math.hypot(screen.width, screen.height) / d);
+    msg.textContent = 'Estimated from a ' + d + ' in screen. Now fine-tune with the card or ruler.';
+  });
+  $('reset').addEventListener('click', function () {
+    state.ppi = 96; state.dpr = window.devicePixelRatio || 1; state.calibrated = false;
+    try { localStorage.removeItem(KEY); } catch (e) {}
+    render();
+  });
+
+  function watchZoom() {
+    var mq = window.matchMedia('(resolution: ' + (window.devicePixelRatio || 1) + 'dppx)');
+    var onChange = function () { mq.removeEventListener('change', onChange); render(); watchZoom(); };
+    mq.addEventListener('change', onChange);
+  }
+  if (window.matchMedia) watchZoom();
+  window.addEventListener('resize', render);
+  render();
+})();
+</script>
