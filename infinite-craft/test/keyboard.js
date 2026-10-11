@@ -100,8 +100,9 @@ function check(cond, label, detail) {
   await page.fill('#ic-target', 'Steam');
   await page.click('#ic-target');
   await page.keyboard.press('Control+Enter');
-  await page.waitForTimeout(200);
-  check(await page.evaluate(() => window._icAutoInstance.running || window._icAutoInstance.stats.crafts > 0), 'Ctrl+Enter starts a run');
+  await page.waitForTimeout(300);
+  // The run may already be over (nothing to build in this bare page); the status shows it ran.
+  check(/Steam/.test(await page.textContent('#ic-status')), 'Ctrl+Enter starts a run', await page.textContent('#ic-status'));
   await page.evaluate(() => window._icAutoInstance.stop());
 
   check(errors.length === 0, 'no page errors', errors.join(' | '));

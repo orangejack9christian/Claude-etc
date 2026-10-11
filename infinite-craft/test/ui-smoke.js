@@ -12,9 +12,20 @@ const SCRIPT = fs.readFileSync(path.join(__dirname, '..', 'word-forge-pro.user.j
 const WORLD_SRC = fs.readFileSync(path.join(__dirname, 'sim-world.js'), 'utf8');
 
 let failures = 0;
-function check(cond, label) {
+let currentPage = null;
+async function check(cond, label) {
   console.log((cond ? '  ok   ' : '  FAIL ') + label);
-  if (!cond) failures++;
+  if (!cond) {
+    failures++;
+    if (currentPage) {
+      const dump = await currentPage.evaluate(() => ({
+        status: document.querySelector('#ic-status').textContent,
+        log: window._icAutoInstance.logRows.filter((r) => r.type !== 'craft').slice(-12).map((r) => r.type + ': ' + r.msg)
+      }));
+      console.log('       status: ' + dump.status);
+      for (const l of dump.log) console.log('       ' + l);
+    }
+  }
 }
 
 (async () => {
@@ -22,6 +33,7 @@ function check(cond, label) {
   const browser = await chromium.launch();
   const context = await browser.newContext({ acceptDownloads: true });
   const page = await context.newPage();
+  currentPage = page;
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await page.route('https://infinibrowser.wiki/api/**', async (route) => {
@@ -68,88 +80,92 @@ function check(cond, label) {
   await page.waitForFunction(() => /^Ready/.test((document.querySelector('#ic-status') || {}).textContent || ''), null, { timeout: 20000 });
 
   const app = (fn, arg) => page.evaluate(fn, arg);
-  check(await page.inputValue('#ic-target') === 'Dragon', 'v5 draft target restored');
-  check(await page.inputValue('#ic-speed') === 'fast', 'v5 speed restored');
-  check((await page.inputValue('#ic-exclude')).trim() === 'Lava', 'v5 exclude list restored');
-  check(await app(() => window._icAutoInstance.mem.result('Water', 'Fire')) === 'Steam', 'v5 pair results migrated');
-  check(await app(() => localStorage.getItem('icAutoPairResults')) === null, 'v5 pair blob removed from localStorage after IndexedDB migration');
-  check(await page.isVisible('#ic-lookup'), 'Infinibrowser lookup link shown');
+  await check(await page.inputValue('#ic-target') === 'Dragon', 'v5 draft target restored');
+  await check(await page.inputValue('#ic-speed') === 'fast', 'v5 speed restored');
+  await check((await page.inputValue('#ic-exclude')).trim() === 'Lava', 'v5 exclude list restored');
+  await check(await app(() => window._icAutoInstance.mem.result('Water', 'Fire')) === 'Steam', 'v5 pair results migrated');
+  await check(await app(() => localStorage.getItem('icAutoPairResults')) === null, 'v5 pair blob removed from localStorage after IndexedDB migration');
+  await check(await page.isVisible('#ic-lookup'), 'Infinibrowser lookup link shown');
 
   // Start via button, wait for completion.
   await page.click('#ic-start');
   await page.waitForFunction(() => !window._icAutoInstance.running, null, { timeout: 60000 });
-  check(await app(() => !!window._icAutoInstance.game.find('Dragon', false)), 'Start button made Dragon');
-  check((await page.inputValue('#ic-target')).trim() === '', 'made target removed from the list');
-  check(!(await page.isDisabled('#ic-copy-recipe')), 'Copy Last Recipe enabled');
+  await check(await app(() => !!window._icAutoInstance.game.find('Dragon', false)), 'Start button made Dragon');
+  await check((await page.inputValue('#ic-target')).trim() === '', 'made target removed from the list');
+  await check(!(await page.isDisabled('#ic-copy-recipe')), 'Copy Last Recipe enabled');
 
   // Pause / resume / skip / stop on a hard target.
   await page.fill('#ic-target', 'Qwxyzzyplonk, Zorblaxian');
   await page.click('#ic-start');
   await page.waitForTimeout(150);
   await page.click('#ic-pause');
-  check(await page.textContent('#ic-pause') === 'Resume', 'Pause toggles to Resume');
+  await check(await page.textContent('#ic-pause') === 'Resume', 'Pause toggles to Resume');
   const craftsAtPause = await app(() => window._icAutoInstance.stats.crafts);
   await page.waitForTimeout(400);
-  check(await app(() => window._icAutoInstance.stats.crafts) - craftsAtPause <= 1, 'no crafting while paused');
+  await check(await app(() => window._icAutoInstance.stats.crafts) - craftsAtPause <= 1, 'no crafting while paused');
   await page.click('#ic-pause');
   await page.click('#ic-skip');
   await page.waitForTimeout(200);
-  check((await page.inputValue('#ic-target')).trim() === 'Zorblaxian', 'Skip removed the current target');
+  await check((await page.inputValue('#ic-target')).trim() === 'Zorblaxian', 'Skip removed the current target');
   await page.waitForFunction(() => !window._icAutoInstance.running, null, { timeout: 90000 });
-  check(await app(() => !!window._icAutoInstance.game.find('Zorblaxian', false)), 'run continued to the next target after Skip');
+  await check(await app(() => !!window._icAutoInstance.game.find('Zorblaxian', false)), 'run continued to the next target after Skip');
   await page.fill('#ic-target', 'Something Very Long Indeed');
   await page.click('#ic-start');
   await page.waitForTimeout(200);
   await page.click('#ic-stop');
-  check(await app(() => !window._icAutoInstance.running) && /Stopped/.test(await page.textContent('#ic-status')), 'Stop halts the run');
+  await check(await app(() => !window._icAutoInstance.running) && /Stopped/.test(await page.textContent('#ic-status')), 'Stop halts the run');
 
   // Log, collapse, sections, speed.
   await page.click('#ic-logbtn');
-  check(await page.isVisible('#ic-log'), 'log opens');
-  check(await page.$$eval('#ic-log-body .log-entry', (els) => els.length) > 0, 'log has entries');
+  await check(await page.isVisible('#ic-log'), 'log opens');
+  await check(await page.$$eval('#ic-log-body .log-entry', (els) => els.length) > 0, 'log has entries');
   await page.click('#ic-log-close');
   await page.click('#ic-collapse');
-  check(await page.isHidden('.ic-body'), 'collapse hides body');
+  await check(await page.isHidden('.ic-body'), 'collapse hides body');
   await page.click('#ic-collapse');
   await page.selectOption('#ic-speed', 'slow');
-  check(await app(() => localStorage.getItem('icAutoSpeed')) === 'slow', 'speed saved');
+  await check(await app(() => localStorage.getItem('icAutoSpeed')) === 'slow', 'speed saved');
 
   // Pasted recipe.
   await page.click('details[data-sec="settings"] > summary');
   await page.fill('#ic-recipe-text', world.lineage('Castle').map((s) => s[0] + ' + ' + s[1] + ' = ' + s[2]).join('\n'));
   await page.click('#ic-recipe-run');
   await page.waitForFunction(() => !window._icAutoInstance.running, null, { timeout: 60000 });
-  check(await app(() => !!window._icAutoInstance.game.find('Castle', true)), 'pasted recipe crafted Castle');
+  await check(await app(() => !!window._icAutoInstance.game.find('Castle', true)), 'pasted recipe crafted Castle');
 
   // Export / import round trip.
   const [download] = await Promise.all([page.waitForEvent('download'), page.click('#ic-export')]);
   const exported = JSON.parse(fs.readFileSync(await download.path(), 'utf8'));
-  check(exported.version && exported.pairResults && Object.keys(exported.pairResults).length > 10, 'export has pair results');
+  await check(exported.version && exported.pairResults && Object.keys(exported.pairResults).length > 10, 'export has pair results');
   await app(() => { window._icAutoInstance.mem.pairs.clear(); });
   await page.setInputFiles('#ic-import-file', { name: 'h.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(exported)) });
   await page.waitForFunction(() => /Imported/.test(document.querySelector('#ic-status').textContent), null, { timeout: 5000 });
-  check(await app(() => window._icAutoInstance.mem.pairs.size) > 10, 'import restored pair results');
+  await check(await app(() => window._icAutoInstance.mem.pairs.size) > 10, 'import restored pair results');
 
   // Pokedex with mocked PokeAPI.
   await page.click('details[data-sec="pokedex"] > summary');
   await page.click('#ic-poke-load');
   await page.waitForFunction(() => /Loaded 4/.test(document.querySelector('#ic-poke-status').textContent), null, { timeout: 5000 });
-  check(await app(() => window._icAutoInstance.pokedexList.join('|')) === 'Dragon|Mr. Mime|Nidoran♀|Zorblax', 'Pokedex names formatted');
+  await check(await app(() => window._icAutoInstance.pokedexList.join('|')) === 'Dragon|Mr. Mime|Nidoran♀|Zorblax', 'Pokedex names formatted');
   await page.fill('#ic-poke-start', '4');
   await page.dispatchEvent('#ic-poke-start', 'change');
   await page.click('#ic-poke-run');
   await page.waitForFunction(() => !window._icAutoInstance.running, null, { timeout: 90000 });
-  check(await app(() => !!window._icAutoInstance.game.find('Zorblax', false)), 'Pokedex run made #4 (Zorblax)');
-  check(/complete/.test(await page.textContent('#ic-poke-status')), 'Pokedex queue completes');
+  await check(await app(() => !!window._icAutoInstance.game.find('Zorblax', false)), 'Pokedex run made #4 (Zorblax)');
+  await check(/complete/.test(await page.textContent('#ic-poke-status')), 'Pokedex queue completes');
 
-  // Explore mode (no targets) runs and stops.
+  // Start with an empty box never combines anything at random.
   await page.fill('#ic-target', '');
   const before = await app(() => window._icAutoInstance.stats.crafts);
   await page.click('#ic-start');
+  await page.waitForTimeout(400);
+  await check(await app(() => window._icAutoInstance.stats.crafts) === before && !(await app(() => window._icAutoInstance.running)), 'Start with no words crafts nothing');
+  await check(/Type the word/.test(await page.textContent('#ic-status')), 'Start with no words asks for a word');
+  // Random exploring only happens through its own button.
+  await page.click('#ic-explore');
   await page.waitForTimeout(600);
   await page.click('#ic-stop');
-  check(await app(() => window._icAutoInstance.stats.crafts) > before, 'explore mode crafts');
-  check(await app(() => window._icAutoInstance.game.names().indexOf('Lava') >= 0 ? true : true), 'exclude list does not break exploring');
+  await check(await app(() => window._icAutoInstance.stats.crafts) > before, 'Explore Randomly button explores');
 
   // Panel drag.
   const box = await page.locator('#ic-header').boundingBox();
@@ -158,9 +174,9 @@ function check(cond, label) {
   await page.mouse.move(box.x + 230, box.y + 110);
   await page.mouse.up();
   const pos = await app(() => JSON.parse(localStorage.getItem('icForgePanelPosV6') || 'null'));
-  check(pos && parseInt(pos.left, 10) > 150, 'panel drags and remembers position');
+  await check(pos && parseInt(pos.left, 10) > 150, 'panel drags and remembers position');
 
-  check(errors.length === 0, 'no page errors' + (errors.length ? ': ' + errors.join(' | ') : ''));
+  await check(errors.length === 0, 'no page errors' + (errors.length ? ': ' + errors.join(' | ') : ''));
   await browser.close();
   console.log(failures ? failures + ' check(s) failed' : 'all UI checks passed');
   process.exit(failures ? 1 : 0);
