@@ -6,3 +6,4 @@ viewer/data.json
 # Benchmark run outputs; the saved positions are tracked.
 bench/*
 !bench/late16k.txt
+__pycache__/
