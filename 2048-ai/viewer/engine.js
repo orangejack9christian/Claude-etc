@@ -127,7 +127,7 @@
       if (version !== 1 && version !== 2) throw new Error('unsupported network version');
       const np = u32(), nc = u32();
       this.nstages = version === 2 ? u32() : 1;
-      if (version === 2) u32();  // stage tile: 14 (a 16384 tile starts the endgame stage)
+      if (version === 2) u32();  // stage tile: 14 (stage 1 from a 16384 tile, stage 2 from 16384 + 8192)
       const nt = np * this.nstages;
       this.patterns = [];
       for (let p = 0; p < np; p++) {
@@ -197,9 +197,10 @@
     }
 
     value(b) {
-      let late = false;
-      if (this.nstages > 1) for (let i = 0; i < 16; i++) if (b[i] >= 14) { late = true; break; }
-      const shift = late ? this.np : 0;
+      let late = false, has8192 = false;
+      for (let i = 0; i < 16; i++) { if (b[i] >= 14) late = true; if (b[i] === 13) has8192 = true; }
+      const stage = this.nstages < 2 || !late ? 0 : this.nstages > 2 && has8192 ? 2 : 1;
+      const shift = stage * this.np;
       let v = 0;
       for (const f of this.features) {
         const c = f.cells;

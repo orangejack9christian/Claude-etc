@@ -28,6 +28,18 @@ dying right after the 16384 tile:
   start from the middle of the previous one, so the endgame gets more practice.
 - From game 616K, a second stage: once a 16384 tile is on the board the network switches
   to its own endgame weights (initialised as a copy of the main ones).
+- From game 1.12M, endgame drills: every position where a game first makes a 16384 tile
+  is saved, and half of all training games start from a saved one with fresh random
+  tiles, so the hardest part of the game gets most of the practice (as in Yeh et al.'s
+  multi-stage TD learning).
+- From game 1.65M, a third stage for positions holding both a 16384 and an 8192, the
+  stretch right before the final merge into 32768.
+
+**Endgame benchmark.** `bench/late16k.txt` holds 311 positions captured at the moment a
+game first made its 16384 tile. `play --starts bench/late16k.txt` replays them with fixed
+random tiles, which measures what decides the 32768 tile three times faster than full
+games. From those positions the 1.12M-game network reached 32768 in 0.3% of games at
+search depth 2 and 3.5% at depth 3: in the endgame, lookahead matters most.
 
 **Search: expectimax.** Move nodes take the best move, chance nodes average over every
 empty cell receiving a 2 (90%) or 4 (10%). Like a chess engine it uses iterative
@@ -85,7 +97,7 @@ make test
 # train (resumable; SIGINT/SIGTERM saves a checkpoint)
 mkdir -p runs/main && cd runs/main
 ../../build/train --threads 4 --hours 2 --tc --alpha 1.0 --out weights.bin
-../../build/train --threads 4 --hours 2 --tc --alpha 1.0 --restarts 3 --stages 2 --resume weights.bin
+../../build/train --threads 4 --hours 2 --tc --alpha 1.0 --restarts 3 --stages 3 --drills 0.5 --resume weights.bin
 cd ../..
 
 # benchmark
@@ -93,6 +105,7 @@ build/play --weights runs/main/weights.bin --games 1000 --depth 1
 build/play --weights runs/main/weights.bin --games 100 --depth 3
 build/play --weights runs/main/weights.bin --games 10 --time 100   # 100 ms per move
 build/play --weights runs/main/weights.bin --games 40 --depth 3 --extra 1   # deeper when few cells are empty
+build/play --net runs/main/net.bin --starts bench/late16k.txt --games 311 --depth 3   # endgame benchmark
 
 # package for the viewer, then serve viewer/ over HTTP
 tools/release.sh runs/main

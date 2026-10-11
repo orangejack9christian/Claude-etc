@@ -25,7 +25,8 @@ struct Net {
   static constexpr int NF = NP * NI;    // active features per board
   static constexpr uint32_t PSIZE = 1u << (4 * NC);
   static constexpr size_t SIZE = (size_t)NP * PSIZE;  // weights per stage
-  // Optional second stage: separate weights once a 16384 tile is on the board.
+  // Optional extra stages: separate weights once a 16384 tile is on the board (stage 1),
+  // and once a 16384 and an 8192 are both on it (stage 2).
   static constexpr int STAGE_TILE = 14;
   static constexpr int PATTERNS[NP][NC] = {
       {0, 1, 2, 3, 4, 5},   // top row + two below
@@ -46,7 +47,15 @@ struct Net {
 
   // True once the board holds a tile of 2^14 or more: bits 1-3 of some nibble all set.
   static inline bool late(board_t b) { return (b & (b >> 1) & (b >> 2) & 0x2222222222222222ULL) != 0; }
-  inline uint32_t stage_base(board_t b) const { return stages > 1 && late(b) ? (uint32_t)SIZE : 0; }
+  // True if some cell holds exactly 2^13 (bits 0, 2, 3 set and bit 1 clear).
+  static inline bool has8192(board_t b) {
+    return (b & (b >> 2) & (b >> 3) & ~(b >> 1) & 0x1111111111111111ULL) != 0;
+  }
+  static inline int stage_of(board_t b, int stages) {
+    if (stages < 2 || !late(b)) return 0;
+    return stages > 2 && has8192(b) ? 2 : 1;
+  }
+  inline uint32_t stage_base(board_t b) const { return (uint32_t)(stage_of(b, stages) * SIZE); }
 
   Net() {
     for (int p = 0; p < NP; p++) {
@@ -80,18 +89,18 @@ struct Net {
     }
   }
 
-  // Turn a one-stage network into two: the endgame stage starts as a copy of the
-  // main weights, with fresh learning-rate accumulators and update counts.
-  void add_endgame_stage() {
-    if (stages != 1) return;
-    w.resize(2 * SIZE);
-    std::copy(w.begin(), w.begin() + SIZE, w.begin() + SIZE);
-    if (!cnt.empty()) cnt.resize(2 * SIZE, 0);
+  // Add the next stage: it starts as a copy of the last one, with fresh learning-rate
+  // accumulators and update counts.
+  void add_stage() {
+    size_t n = SIZE * stages;
+    w.resize(n + SIZE);
+    std::copy(w.begin() + (n - SIZE), w.begin() + n, w.begin() + n);
+    if (!cnt.empty()) cnt.resize(n + SIZE, 0);
     if (tc) {
-      E.resize(2 * SIZE, 0.f);
-      A.resize(2 * SIZE, 0.f);
+      E.resize(n + SIZE, 0.f);
+      A.resize(n + SIZE, 0.f);
     }
-    stages = 2;
+    stages++;
   }
 
   inline void ids(board_t b, uint32_t* out) const {

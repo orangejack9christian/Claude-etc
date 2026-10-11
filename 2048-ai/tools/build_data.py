@@ -17,7 +17,12 @@ def load_log(path):
     rows = []
     with open(path) as f:
         for r in csv.DictReader(f):
-            rows.append({k: float(v) for k, v in r.items()})
+            # Older rows lack the drill columns; keep whatever each row has.
+            row = {k: float(v) for k, v in r.items() if k and v not in (None, "")}
+            # A run resumed from an earlier checkpoint replaces the rows logged after it.
+            while rows and rows[-1]["games"] >= row["games"]:
+                rows.pop()
+            rows.append(row)
     return rows
 
 
@@ -145,7 +150,8 @@ def main(run, out):
     meta_out["final"] = final
     meta_out["stages"] = meta.get("stages", 1)
     events = []
-    for fname, label in (("restart_from.txt", "Endgame practice starts"), ("stages_from.txt", "Endgame network added")):
+    for fname, label in (("restart_from.txt", "Endgame practice starts"), ("stages_from.txt", "Endgame network added"),
+                         ("drills_from.txt", "Endgame drills"), ("stage3_from.txt", "Final-stretch network added")):
         path = os.path.join(run, fname)
         if os.path.exists(path):
             events.append({"games": int(open(path).read().strip()), "label": label})

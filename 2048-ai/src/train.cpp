@@ -32,7 +32,8 @@ struct Options {
   std::string resume;
   int record_per_milestone = 3;
   int restarts = 0;  // games started from the middle of the previous one, per fresh game
-  int stages = 1;    // 2 adds endgame weights used once a 16384 tile is on the board
+  int stages = 1;    // 2: endgame weights once a 16384 tile is on the board; 3: also once 16384 + 8192
+  double drills = 0; // share of games that start from a saved position with a fresh 16384 tile
 };
 
 static Options opt;
@@ -48,6 +49,10 @@ struct Window {
   uint64_t n = 0, score = 0, max_score = 0, moves = 0;
   uint64_t reach[16] = {0};
 } win;
+// Endgame drills since the last log line: games, how many made 32768, points scored.
+struct Drills {
+  uint64_t n = 0, r32768 = 0, gain = 0;
+} drill_win;
 static FILE* log_file = nullptr;
 static uint64_t last_log_moves = 0;
 static double last_log_time = 0;
@@ -96,6 +101,13 @@ static void maybe_record(uint64_t done, RNG& rng) {
   fclose(f);
 }
 
+static void report_drill(uint64_t gain, int maxt) {
+  std::lock_guard<std::mutex> lk(stat_mu);
+  drill_win.n++;
+  drill_win.gain += gain;
+  if (maxt >= 15) drill_win.r32768++;
+}
+
 static void report_game(uint64_t score, int maxt, uint64_t moves) {
   std::lock_guard<std::mutex> lk(stat_mu);
   win.n++;
@@ -110,16 +122,23 @@ static void report_game(uint64_t score, int maxt, uint64_t moves) {
   last_log_moves = md;
   last_log_time = t;
   double n = (double)win.n;
-  fprintf(log_file, "%" PRIu64 ",%.1f,%.1f,%" PRIu64 ",%.1f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.0f\n", games_done.load(), t,
-          win.score / n, win.max_score, win.moves / n, win.reach[11] / n, win.reach[12] / n, win.reach[13] / n,
-          win.reach[14] / n, win.reach[15] / n, win.reach[10] / n, mps);
+  double dn = std::max<uint64_t>(1, drill_win.n);
+  fprintf(log_file, "%" PRIu64 ",%.1f,%.1f,%" PRIu64 ",%.1f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.0f,%" PRIu64 ",%.4f,%.0f\n",
+          games_done.load(), t, win.score / n, win.max_score, win.moves / n, win.reach[11] / n, win.reach[12] / n,
+          win.reach[13] / n, win.reach[14] / n, win.reach[15] / n, win.reach[10] / n, mps, drill_win.n,
+          drill_win.r32768 / dn, drill_win.gain / dn);
   fflush(log_file);
   printf("games %9" PRIu64 "  t %7.0fs  avg %8.0f  max %7" PRIu64 "  2048 %5.1f%%  4096 %5.1f%%  8192 %5.1f%%  "
-         "16384 %5.1f%%  32768 %5.1f%%  %.0f moves/s\n",
+         "16384 %5.1f%%  32768 %5.1f%%  %.0f moves/s",
          games_done.load(), t, win.score / n, win.max_score, 100 * win.reach[11] / n, 100 * win.reach[12] / n,
          100 * win.reach[13] / n, 100 * win.reach[14] / n, 100 * win.reach[15] / n, mps);
+  if (drill_win.n)
+    printf("  | drills %" PRIu64 ": 32768 %.1f%%, +%.0f pts", drill_win.n, 100 * drill_win.r32768 / dn,
+           drill_win.gain / dn);
+  printf("\n");
   fflush(stdout);
   win = Window();
+  drill_win = Drills();
 }
 
 static void worker(int tid) {
@@ -131,17 +150,36 @@ static void worker(int tid) {
   states.reserve(1 << 16);
   board_t restart_from = 0;
   int restarts_left = 0;
+  // Endgame drills: positions where a game first made a 16384 tile, replayed with fresh
+  // random tiles so the network practises the hardest part of the game far more often.
+  std::vector<board_t> pool;
+  const size_t POOL = 4096;
   while (!stop.load(std::memory_order_relaxed)) {
     // Restart strategy: after a fresh game, the next few games start from the middle
     // of the previous one, so the endgame gets more practice.
-    bool fresh = restart_from == 0;
-    board_t b = fresh ? initial_board(rng) : restart_from;
+    bool drill = false;
+    board_t b;
+    if (restart_from) {
+      b = restart_from;
+    } else if (!pool.empty() && rng.below(1000000) < opt.drills * 1000000) {
+      b = pool[rng.below(pool.size())];
+      drill = true;
+    } else {
+      b = initial_board(rng);
+      restarts_left = opt.restarts;
+    }
+    bool fresh = !restart_from && !drill;
     restart_from = 0;
-    if (fresh) restarts_left = opt.restarts;
+    bool late_seen = Net::late(b);
     uint64_t score = 0;
     path.clear();
     states.clear();
     for (;;) {
+      if (!late_seen && Net::late(b)) {
+        late_seen = true;
+        if (pool.size() < POOL) pool.push_back(b);
+        else pool[rng.below(POOL)] = b;
+      }
       float best = 0;
       board_t best_a = 0;
       uint32_t best_r = 0;
@@ -164,13 +202,14 @@ static void worker(int tid) {
       float nv = net.learn(path[t].first, target, opt.alpha);
       target = path[t].second + nv;
     }
-    if (restarts_left > 0 && path.size() >= 200) {
+    if (!drill && restarts_left > 0 && path.size() >= 200) {
       restart_from = states[path.size() / 2];
       restarts_left--;
     }
     moves_done += path.size();
     uint64_t done = ++games_done;
     if (fresh) report_game(score, max_tile(b), path.size());  // stats cover full games only
+    else if (drill) report_drill(score, max_tile(b));
     if (tid == 0) maybe_record(done, rec_rng);
     if (done >= opt.max_games || now_s() >= opt.hours * 3600) stop = true;
   }
@@ -203,6 +242,7 @@ int main(int argc, char** argv) {
     else if (a == "--record") opt.record_per_milestone = std::stoi(nxt());
     else if (a == "--restarts") opt.restarts = std::stoi(nxt());
     else if (a == "--stages") opt.stages = std::stoi(nxt());
+    else if (a == "--drills") opt.drills = std::stod(nxt());
     else {
       fprintf(stderr, "unknown option %s\n", a.c_str());
       return 1;
@@ -226,13 +266,15 @@ int main(int argc, char** argv) {
   } else {
     net.alloc(true, opt.tc, opt.oi);
   }
-  if (opt.stages == 2 && net.stages == 1) {
-    net.add_endgame_stage();
-    printf("added endgame stage at %" PRIu64 " games\n", net.games);
+  while (net.stages < opt.stages && net.stages < 3) {
+    net.add_stage();
+    printf("added stage %d at %" PRIu64 " games\n", net.stages - 1, net.games);
   }
   log_file = fopen(opt.log.c_str(), appending ? "a" : "w");
   if (!appending) {
-    fprintf(log_file, "games,seconds,avg_score,max_score,avg_moves,r2048,r4096,r8192,r16384,r32768,r1024,moves_per_sec\n");
+    fprintf(log_file,
+            "games,seconds,avg_score,max_score,avg_moves,r2048,r4096,r8192,r16384,r32768,r1024,moves_per_sec,"
+            "drills,drill_r32768,drill_gain\n");
     fflush(log_file);
     remove(opt.games_out.c_str());
   } else {
@@ -249,8 +291,8 @@ int main(int argc, char** argv) {
   }
   t0 = Clock::now();
   last_log_time = now_s();
-  printf("training: threads=%d alpha=%.3f tc=%d oi=%.0f restarts=%d stages=%d hours=%.2f\n", opt.threads, opt.alpha,
-         opt.tc, opt.oi, opt.restarts, net.stages, opt.hours);
+  printf("training: threads=%d alpha=%.3f tc=%d oi=%.0f restarts=%d stages=%d drills=%.2f hours=%.2f\n", opt.threads,
+         opt.alpha, opt.tc, opt.oi, opt.restarts, net.stages, opt.drills, opt.hours);
   fflush(stdout);
 
   if (next_milestone == 0) {

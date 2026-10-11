@@ -52,7 +52,8 @@
 
   function setup(Arcade, game) {
     // ---- settings ---------------------------------------------------------
-    const settings = { enabled: false, think: 100, speed: 1, restart: true, collapsed: false };
+    // At 2 moves a second there is time for half a second of search per move.
+    const settings = { enabled: false, think: 500, speed: 1, restart: true, collapsed: false };
     try { Object.assign(settings, JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}')); } catch (e) {}
     if (!(settings.speed >= 0 && settings.speed < SPEEDS.length)) settings.speed = 1;
     const save = () => { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) {} };

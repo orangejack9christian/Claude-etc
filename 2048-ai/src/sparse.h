@@ -10,7 +10,7 @@
 namespace g2048 {
 
 struct SparseNet {
-  static const int MAXP = 8;
+  static const int MAXP = 12;
   static const int NC = 6;
   int np = 0, nf = 0, nstages = 1, stage_tile = 14;
   uint8_t pat[MAXP][NC];
@@ -44,7 +44,7 @@ struct SparseNet {
       nstages = (int)rd32(d + 16);
       stage_tile = (int)rd32(d + 20);
       p += 8;
-      if (nstages < 1 || nstages > 2 || stage_tile != 14) return false;
+      if (nstages < 1 || nstages > 3 || stage_tile != 14) return false;
     }
     int ntab = np * nstages;
     if (np < 1 || ntab > MAXP) return false;
@@ -122,27 +122,33 @@ struct SparseNet {
     return vals[p][wbase[p][w] + __builtin_popcountll(word & (bit - 1))];
   }
 
-  // Endgame tables override the main ones where they have an entry.
-  inline float weight_late(int p, uint32_t idx) const {
-    int t = np + p;
-    uint32_t w = idx >> 6;
-    uint64_t word = bits[t][w];
-    uint64_t bit = 1ULL << (idx & 63);
-    if (!(word & bit)) return weight(p, idx);
-    return vals[t][wbase[t][w] + __builtin_popcountll(word & (bit - 1))];
+  // A later stage's table overrides the one before it where it has an entry.
+  inline float weight_staged(int t, uint32_t idx) const {
+    for (;; t -= np) {
+      uint32_t w = idx >> 6;
+      uint64_t word = bits[t][w];
+      uint64_t bit = 1ULL << (idx & 63);
+      if (word & bit) return vals[t][wbase[t][w] + __builtin_popcountll(word & (bit - 1))];
+      if (t < np) return winit;
+    }
   }
 
   static inline bool late(board_t b) { return (b & (b >> 1) & (b >> 2) & 0x2222222222222222ULL) != 0; }
+  static inline bool has8192(board_t b) {
+    return (b & (b >> 2) & (b >> 3) & ~(b >> 1) & 0x1111111111111111ULL) != 0;
+  }
 
   inline float value(board_t b) const {
     float v = 0;
-    if (nstages > 1 && late(b)) {
+    int stage = nstages < 2 || !late(b) ? 0 : nstages > 2 && has8192(b) ? 2 : 1;
+    if (stage) {
+      int off = stage * np;
       for (int f = 0; f < nf; f++) {
         const uint8_t* s = shift[f];
         uint32_t idx = (uint32_t)((b >> s[0]) & 0xF) | ((uint32_t)((b >> s[1]) & 0xF) << 4) |
                        ((uint32_t)((b >> s[2]) & 0xF) << 8) | ((uint32_t)((b >> s[3]) & 0xF) << 12) |
                        ((uint32_t)((b >> s[4]) & 0xF) << 16) | ((uint32_t)((b >> s[5]) & 0xF) << 20);
-        v += weight_late(fpat[f], idx);
+        v += weight_staged(off + fpat[f], idx);
       }
       return v;
     }

@@ -8,8 +8,9 @@
 //   per table (stage-major, stages*np tables): u32 count, f32 scale
 //   per table: i16 value[count]      weight = winit + value * scale
 //   per table: LEB128 key deltas     sorted 24-bit table indices
-// Weights updated fewer than --prune times are dropped. A dropped main-stage weight
-// reads back as winit; a dropped endgame weight falls back to the main-stage weight.
+// Stages: 0 = main, 1 = a 16384 tile on the board, 2 = a 16384 and an 8192 (when stages = 3).
+// Weights updated fewer than --prune times are dropped. A dropped main-stage weight reads
+// back as winit; a dropped weight of a later stage falls back to the stage before it.
 #include <cinttypes>
 
 #include "ntuple.h"
@@ -18,18 +19,20 @@ using namespace g2048;
 
 int main(int argc, char** argv) {
   std::string weights = "weights.bin", out = "net.bin", meta;
-  int prune = 1;
+  int prune = 1, prune_late = -1;  // prune_late: threshold for stages 1-2 (default: same as prune)
   for (int i = 1; i < argc; i++) {
     std::string a = argv[i];
     if (a == "--weights") weights = argv[++i];
     else if (a == "--out") out = argv[++i];
     else if (a == "--prune") prune = std::stoi(argv[++i]);
     else if (a == "--meta") meta = argv[++i];
+    else if (a == "--prune-late") prune_late = std::stoi(argv[++i]);
     else {
       fprintf(stderr, "unknown option %s\n", a.c_str());
       return 1;
     }
   }
+  if (prune_late < 0) prune_late = prune;
   Net net;
   net.load(weights, 1);
   FILE* f = fopen(out.c_str(), "wb");
@@ -48,8 +51,9 @@ int main(int argc, char** argv) {
     const float* W = net.w.data() + (size_t)p * Net::PSIZE;
     const uint16_t* C = net.cnt.data() + (size_t)p * Net::PSIZE;
     float mx = 0;
+    const int k = p < Net::NP ? prune : prune_late;
     for (uint32_t i = 0; i < Net::PSIZE; i++) {
-      if (C[i] >= prune && W[i] != net.winit) {
+      if (C[i] >= k && W[i] != net.winit) {
         keys[p].push_back(i);
         mx = std::max(mx, std::fabs(W[i] - net.winit));
       }

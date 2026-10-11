@@ -8,6 +8,10 @@
 //   --prune K    drop weights updated < K times  --quant     round weights like the web export
 //   --cut P      prune chance branches below probability P (default 1e-4)
 //   --record F   write every game as JSON lines  --summary F write the result as JSON
+// Endgame benchmark:
+//   --dump-late F  append the board at the moment each game first makes a 16384 tile
+//   --starts F     start game i from line i of F (one board per line, 16 hex digits)
+//                  instead of an empty board; scores then count points from there on
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -25,8 +29,8 @@
 using namespace g2048;
 
 struct Options {
-  std::string weights, net, record, summary;
-  int games = 100, depth = 1, threads = 4, prune = 0, max_depth = 20, tt_bits = 22, extra = 0;
+  std::string weights, net, record, summary, dump_late, starts;
+  int games = 100, depth = 1, threads = 4, prune = 0, prune_late = -1, max_depth = 20, tt_bits = 22, extra = 0;
   double time_ms = 0;
   float cut = 1e-4f;
   bool quant = false;
@@ -51,6 +55,23 @@ static int run(const Eval& ev, uint64_t trained, const Options& o) {
   uint64_t total_moves = 0, total_nodes = 0, depth_sum = 0;
   double search_ms = 0;
   FILE* rf = o.record.empty() ? nullptr : fopen(o.record.c_str(), "w");
+  FILE* df = o.dump_late.empty() ? nullptr : fopen(o.dump_late.c_str(), "a");
+  std::vector<board_t> starts;
+  if (!o.starts.empty()) {
+    FILE* sf = fopen(o.starts.c_str(), "r");
+    if (!sf) throw std::runtime_error("cannot open " + o.starts);
+    char line[64];
+    while (fgets(line, sizeof line, sf)) {
+      board_t b = 0;
+      for (int i = 0; i < 16 && line[i] && line[i] != '\n'; i++) {
+        char c = line[i];
+        b |= (board_t)(c <= '9' ? c - '0' : c - 'a' + 10) << (4 * i);
+      }
+      if (b) starts.push_back(b);
+    }
+    fclose(sf);
+    printf("starting from %zu saved positions\n", starts.size());
+  }
   double t0 = now_ms();
   auto worker = [&]() {
     std::unique_ptr<TTEntry[]> tt(new TTEntry[1u << o.tt_bits]);
@@ -62,8 +83,9 @@ static int run(const Eval& ev, uint64_t trained, const Options& o) {
       if (gi >= o.games) break;
       RNG rng(o.seed + gi * 0x9E3779B9ULL);
       GameRecord g;
-      board_t b = initial_board(rng);
+      board_t b = starts.empty() ? initial_board(rng) : starts[gi % starts.size()];
       g.init = b;
+      bool late_seen = Net::late(b);
       uint64_t nodes = 0, dsum = 0;
       double ms = 0;
       for (;;) {
@@ -81,6 +103,15 @@ static int run(const Eval& ev, uint64_t trained, const Options& o) {
         int pos = 0, val = 1;
         b = add_random_tile(a, rng, &pos, &val);
         g.add(r.dir, pos, val);
+        if (df && !late_seen && Net::late(b)) {
+          late_seen = true;
+          char hex[17];
+          for (int i = 0; i < 16; i++) hex[i] = "0123456789abcdef"[(b >> (4 * i)) & 0xF];
+          hex[16] = 0;
+          std::lock_guard<std::mutex> lk(mu);
+          fprintf(df, "%s\n", hex);
+          fflush(df);
+        }
       }
       g.max_tile = max_tile(b);
       std::lock_guard<std::mutex> lk(mu);
@@ -110,6 +141,7 @@ static int run(const Eval& ev, uint64_t trained, const Options& o) {
   for (int t = 0; t < o.threads; t++) th.emplace_back(worker);
   for (auto& t : th) t.join();
   if (rf) fclose(rf);
+  if (df) fclose(df);
   double secs = (now_ms() - t0) / 1000;
 
   std::vector<uint64_t> sorted = scores;
@@ -163,10 +195,13 @@ int main(int argc, char** argv) {
     else if (a == "--record") o.record = nxt();
     else if (a == "--summary") o.summary = nxt();
     else if (a == "--prune") o.prune = std::stoi(nxt());
+    else if (a == "--prune-late") o.prune_late = std::stoi(nxt());
     else if (a == "--quant") o.quant = true;
     else if (a == "--seed") o.seed = std::stoull(nxt());
     else if (a == "--tt-bits") o.tt_bits = std::stoi(nxt());
     else if (a == "--extra") o.extra = std::stoi(nxt());
+    else if (a == "--dump-late") o.dump_late = nxt();
+    else if (a == "--starts") o.starts = nxt();
     else {
       fprintf(stderr, "unknown option %s\n", a.c_str());
       return 1;
@@ -202,18 +237,19 @@ int main(int argc, char** argv) {
   Net net;
   net.load(o.weights.empty() ? "weights.bin" : o.weights, o.prune > 0 ? 1 : 0);
   // Emulate the web export: per table, drop weights updated < prune times, then round to
-  // int16 steps. Dropped main-stage weights become winit; dropped endgame weights fall
-  // back to the (already rounded) main-stage weight.
+  // int16 steps. Dropped main-stage weights become winit; dropped weights of a later stage
+  // fall back to the (already rounded) weight of the stage before it.
   if (o.prune > 0 || o.quant) {
     size_t kept = 0;
     for (int t = 0; t < Net::NP * net.stages; t++) {
       size_t off = (size_t)t * Net::PSIZE;
       float* W = net.w.data() + off;
-      const float* W0 = net.w.data() + (size_t)(t % Net::NP) * Net::PSIZE;
+      const float* W0 = t >= Net::NP ? net.w.data() + off - Net::SIZE : nullptr;
       bool endgame = t >= Net::NP;
       std::vector<char> keep(Net::PSIZE, 1);
-      if (o.prune > 0)
-        for (uint32_t i = 0; i < Net::PSIZE; i++) keep[i] = net.cnt[off + i] >= o.prune;
+      int k = endgame && o.prune_late >= 0 ? o.prune_late : o.prune;
+      if (k > 0)
+        for (uint32_t i = 0; i < Net::PSIZE; i++) keep[i] = net.cnt[off + i] >= k;
       float mx = 0;
       for (uint32_t i = 0; i < Net::PSIZE; i++)
         if (keep[i]) mx = std::max(mx, std::fabs(W[i] - net.winit)), kept++;

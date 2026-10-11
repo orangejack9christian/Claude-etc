@@ -7,7 +7,7 @@
 #
 #   tools/release.sh [run_dir]        e.g. tools/release.sh runs/main
 # Env: FINAL=1 once training has finished (labels the last stage "Fully trained")
-#      PRUNE (min updates to keep a weight, default 16)
+#      PRUNE (min updates to keep a weight, default 16); PRUNE_LATE (same, for stages 1-2)
 #      EVALS (search settings to test as depth:games, <depth>x<extra>:games or t<ms>:games;
 #             default "1:2000 2:1000 3:200")
 set -euo pipefail
@@ -18,7 +18,8 @@ EVALS=${EVALS:-"1:2000 2:1000 3:200"}
 THREADS=${THREADS:-$(nproc)}
 
 make -s all
-build/export --weights "${WEIGHTS:-$RUN/weights.bin}" --prune "$PRUNE" --out "$RUN/net.bin" --meta "$RUN/net_meta.json"
+build/export --weights "${WEIGHTS:-$RUN/weights.bin}" --prune "$PRUNE" --prune-late "${PRUNE_LATE:-$PRUNE}" \
+  --out "$RUN/net.bin" --meta "$RUN/net_meta.json"
 gzip -9 -c "$RUN/net.bin" > "$RUN/net.bin.gz"
 rm -f viewer/net-*.bin viewer/net-*.txt
 base64 -w0 "$RUN/net.bin.gz" | split -b 10000000 -d -a 1 --additional-suffix=.txt - viewer/net-
