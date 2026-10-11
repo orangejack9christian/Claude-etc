@@ -1,2 +1,5 @@
 build/
 runs/
+# Interim viewer builds; the final network is committed once with git add -f.
+viewer/net-*.txt
+viewer/data.json
