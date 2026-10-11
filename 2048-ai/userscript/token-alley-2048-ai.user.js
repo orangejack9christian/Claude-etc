@@ -1,12 +1,9 @@
 // ==UserScript==
 // @name         Token Alley 2048 AI
 // @namespace    https://github.com/orangejack9christian/Claude-etc
-// @version      1.0.0
+// @version      1.1.0
 // @description  Lets the self-taught 2048 network and its look-ahead search play the 2048 cabinet in Token Alley. AI games never count toward your bests or the hall of fame, and it stays off in online races.
-// @match        https://*.claudeusercontent.com/*
-// @match        https://claude.ai/*
-// @match        https://*.claude.ai/*
-// @match        https://*.claude.site/*
+// @match        https://*/*
 // @match        file:///*
 // @grant        GM_xmlhttpRequest
 // @connect      raw.githubusercontent.com
@@ -14,6 +11,10 @@
 // @run-at       document-idle
 // ==/UserScript==
 
+// Where it runs: claude.ai serves each artifact from its own sandboxed address, so the script
+// is allowed everywhere but exits at once unless the page is the Token Alley arcade (its
+// title says so and it has the arcade engine). On any other page it does nothing.
+//
 // How it works
 // - The arcade engine exposes window.Arcade; the 2048 cabinet registers a game object
 //   whose `tiles` hold the live board ({ r, c, v, dead }). The script reads that board,
@@ -40,12 +41,13 @@
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const compact = (n) => n >= 1e6 ? (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'K' : String(Math.round(n));
 
-  // ---- wait for the arcade ------------------------------------------------
+  // ---- only the Token Alley arcade ----------------------------------------
+  if (!/Token Alley/i.test(document.title || '')) return;
   let tries = 0;
   const finder = setInterval(() => {
     const game = W.Arcade && Array.isArray(W.Arcade.games) && W.Arcade.games.find((g) => g && g.id === '2048');
     if (game) { clearInterval(finder); setup(W.Arcade, game); }
-    else if (++tries > 60) clearInterval(finder);   // not the arcade: give up quietly after 30 s
+    else if (++tries > 20) clearInterval(finder);   // no 2048 cabinet here: give up quietly
   }, 500);
 
   function setup(Arcade, game) {
@@ -60,7 +62,9 @@
     const origDraw = game.draw, origStart = game.start;
     game.draw = function () { lastDraw = performance.now(); return origDraw.apply(this, arguments); };
     game.start = function () { aiRun = false; paintRun(); return origStart.apply(this, arguments); };
-    const open = () => performance.now() - lastDraw < 400;
+    // The arcade engine says which cabinet is open; older copies without Arcade.current()
+    // fall back to "2048 drew a frame just now".
+    const open = () => (typeof Arcade.current === 'function' ? Arcade.current() === game && !document.hidden : performance.now() - lastDraw < 400);
     const online = () => !!(game.api && game.api.net);
 
     // AI runs never save: not the best score, not the best tile, not the hall of fame.

@@ -55,9 +55,9 @@ second (2 by default) so you can follow it.
 Fair play: a game the AI made any move in never saves its score, best tile or hall-of-fame
 entry, and the AI stays off in online races, which are live against other players.
 
-If the panel never appears, the arcade is probably served from a domain the script's
-`@match` lines don't list. Find the arcade frame's address (DevTools > Console, the frame
-picker at the top) and add a matching `@match` line in Tampermonkey's editor.
+claude.ai serves each artifact from its own sandboxed address, so the script is allowed on
+every https page but exits immediately unless the page is titled "Token Alley" and runs the
+arcade engine; anywhere else it does nothing and downloads nothing.
 
 ## Layout
 
