@@ -7,9 +7,9 @@ const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright');
 const SimWorld = require('./sim-world.js');
+const { installGame } = require('./sim-page.js');
 
 const SCRIPT = fs.readFileSync(path.join(__dirname, '..', 'word-forge-pro.user.js'), 'utf8');
-const WORLD_SRC = fs.readFileSync(path.join(__dirname, 'sim-world.js'), 'utf8');
 
 let failures = 0;
 let currentPage = null;
@@ -59,23 +59,8 @@ async function check(cond, label) {
     localStorage.setItem('icAutoPairResults', JSON.stringify({ 'Fire||Water': 'Steam' }));
     localStorage.setItem('icAutoTriedV2', JSON.stringify(['Fire||Water']));
   });
-  await page.addScriptTag({ content: WORLD_SRC });
-  await page.evaluate(() => {
-    const world = window.SimWorld.create({ seed: 'ui', noise: 0.1 });
-    const vm = {
-      items: world.base.map((t) => ({ text: t, emoji: '' })),
-      instances: [],
-      craft(a, b) {
-        return new Promise((resolve) => setTimeout(() => {
-          const r = world.combine(a.text, b.text);
-          if (r) { if (!vm.items.some((i) => i.text === r)) vm.items.push({ text: r, emoji: '' }); vm.instances.push({ text: r }); }
-          resolve();
-        }, 2));
-      }
-    };
-    document.querySelector('.container').__vue__ = vm;
-    window.__icForgeConfig = { gap: 0, settle: 0, settleMax: 30, observeDebounce: 50, ib: { gap: 0 } };
-  });
+  await installGame(page, { seed: 'ui', noise: 0.1 });
+  await page.evaluate(() => { window.__icForgeConfig = { gap: 0, settle: 0, settleMax: 30, observeDebounce: 50, ib: { gap: 0 } }; });
   await page.addScriptTag({ content: SCRIPT });
   await page.waitForFunction(() => /^Ready/.test((document.querySelector('#ic-status') || {}).textContent || ''), null, { timeout: 20000 });
 

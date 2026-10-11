@@ -11,7 +11,8 @@ by letter with text tools. It replaces "Auto Combiner Pro v5.1".
 1. Install Tampermonkey (or Violentmonkey).
 2. Disable or remove the old "Auto Combiner Pro v51" script, so the two don't both start.
 3. Create a new script and paste in `word-forge-pro.user.js`, or open the raw file URL and let
-   the extension install it.
+   the extension install it. If Tampermonkey asks whether the script may connect to
+   `infinibrowser.wiki`, choose **Always allow**: that's how it looks up recipes.
 4. Open neal.fun/infinite-craft, click the panel's **Words to make** box, type your words, and
    press **Start** (or Ctrl+Enter). Press Esc to leave the box; typing anywhere else goes to
    the game's search bar as usual.
@@ -72,6 +73,15 @@ exist.
 
 ## Changelog
 
+- **6.2.0**: Works with the updated Infinite Craft client. It crafts through the game's own
+  `window.IC` API (places both items on the board and combines them, like dragging) and
+  falls back to the old method on older versions. It reaches Infinibrowser through the
+  userscript manager (`GM_xmlhttpRequest`, `@connect infinibrowser.wiki`), because the
+  browser blocks direct cross-site requests from the game page. It checks the connection on
+  load and says plainly when Infinibrowser is blocked or showing a "checking your browser"
+  page. The result card stays up with the reason a run stopped. A false "different save
+  detected" stop while the game loads is fixed. "Nothing" results recorded by 6.0/6.1 are
+  dropped, since those versions crafted through an API the update changed.
 - **6.1.0**: No more random combining. Guided search and word-splitting guesses are gone;
   every word comes from an Infinibrowser recipe, a phrase of two existing words, or letter
   by letter building. The lookup tries every matching spelling and picks the cheapest
@@ -123,7 +133,12 @@ node test/run-sim.js --seed w9 --noise 0.3 "Fire Truck" Zorblaxian
 SIM_VERBOSE=1 node test/run-sim.js Qwxyzzy   # print the forge log and the recipe used
 node test/ui-smoke.js     # clicks through every panel control
 node test/keyboard.js     # typing in the panel isn't stolen by the game's search bar
+node test/connection.js   # blocked / "checking your browser" Infinibrowser, and recovery
+node test/run-sim.js --legacy Dragon   # the pre-2026 game client
 ```
+
+The simulator imitates the current client: `window.IC` plus `.container`'s
+`craft(instanceA, instanceB)`, which throws unless it's given real board instances.
 
 Latest results (v6.1.0, no random combining):
 

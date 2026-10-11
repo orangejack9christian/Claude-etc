@@ -5,16 +5,18 @@
 //   node test/run-sim.js                    # default scenarios
 //   node test/run-sim.js --seed w7 --noise 0.3 "Fire Truck" Zorblaxian
 //   node test/run-sim.js --random 30 --seed r1   # 30 random words (gibberish, case, digits, phrases)
+//   node test/run-sim.js --legacy ...       # simulate the pre-2026 game client
+//   node test/run-sim.js --gm ...           # route Infinibrowser calls through a GM_xmlhttpRequest shim
 //   SIM_VERBOSE=1 node test/run-sim.js ...  # print the forge log for each target
 'use strict';
 const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright');
 const SimWorld = require('./sim-world.js');
+const { installGame } = require('./sim-page.js');
 
 const ROOT = path.join(__dirname, '..');
 const SCRIPT = fs.readFileSync(path.join(ROOT, 'word-forge-pro.user.js'), 'utf8');
-const WORLD_SRC = fs.readFileSync(path.join(__dirname, 'sim-world.js'), 'utf8');
 const VERBOSE = !!process.env.SIM_VERBOSE;
 
 const DEFAULT_TARGETS = [
@@ -61,13 +63,15 @@ function randomTargets(n, seed) {
 }
 
 function parseArgs(argv) {
-  const out = { seed: null, noise: null, targets: [], timeout: 240000, exact: false, random: 0 };
+  const out = { seed: null, noise: null, targets: [], timeout: 240000, exact: false, random: 0, legacy: false, gm: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--seed') out.seed = argv[++i];
     else if (a === '--noise') out.noise = parseFloat(argv[++i]);
     else if (a === '--timeout') out.timeout = parseInt(argv[++i], 10) * 1000;
     else if (a === '--exact') out.exact = true;
+    else if (a === '--legacy') out.legacy = true;
+    else if (a === '--gm') out.gm = true;
     else if (a === '--random') out.random = parseInt(argv[++i], 10) || 20;
     else out.targets.push(a);
   }
@@ -99,28 +103,18 @@ async function runScenario(browser, scenario) {
       '<body style="background:#fff"><div class="container"><div class="items"></div></div></body></html>'
   }));
   await page.goto('https://neal.fun/infinite-craft/');
-  await page.addScriptTag({ content: WORLD_SRC });
-  await page.evaluate((cfg) => {
-    const world = window.SimWorld.create(cfg);
-    const vm = {
-      items: world.base.map((t) => ({ text: t, emoji: '', discovered: false })),
-      instances: [],
-      craft(a, b) {
-        return new Promise((resolve) => setTimeout(() => {
-          const r = world.combine(a.text, b.text);
-          if (r) {
-            if (!vm.items.some((i) => i.text === r)) vm.items.push({ text: r, emoji: '', discovered: !world.ibHas(r) });
-            vm.instances.push({ text: r });
-          }
-          resolve();
-        }, 1));
-      }
-    };
-    window.__simWorld = world;
-    window.__simVM = vm;
-    document.querySelector('.container').__vue__ = vm;
+  await installGame(page, scenario.world, { legacy: scenario.legacy });
+  await page.evaluate((gm) => {
     window.__icForgeConfig = { gap: 0, settle: 0, settleMax: 30, observeDebounce: 50, ib: { gap: 0, retries: 6 } };
-  }, scenario.world);
+    if (gm) {
+      // Stand-in for the userscript manager's GM_xmlhttpRequest.
+      window.__gmCalls = 0;
+      window.GM_xmlhttpRequest = (o) => {
+        window.__gmCalls++;
+        fetch(o.url).then(async (r) => o.onload({ status: r.status, responseText: await r.text() }), () => o.onerror && o.onerror());
+      };
+    }
+  }, !!scenario.gm);
   await page.addScriptTag({ content: SCRIPT });
   await page.waitForFunction(() => {
     const el = document.querySelector('#ic-status');
@@ -177,6 +171,16 @@ async function runScenario(browser, scenario) {
     }
     if (ok && VERBOSE && info.recipe) console.log('      recipe:\n        ' + info.recipe.split('\n').join('\n        '));
   }
+  if (!scenario.legacy) {
+    const left = await page.evaluate(() => window.IC.getInstances().length);
+    console.log('  Items left on the board: ' + left);
+    if (left > 2) results.push({ target: '(board left clean)', ok: false });
+  }
+  if (scenario.gm) {
+    const calls = await page.evaluate(() => window.__gmCalls || 0);
+    console.log('  Infinibrowser requests through GM_xmlhttpRequest: ' + calls);
+    if (!calls) results.push({ target: '(GM_xmlhttpRequest used)', ok: false });
+  }
   await context.close();
   return results;
 }
@@ -190,7 +194,9 @@ async function runScenario(browser, scenario) {
       world: { seed: args.seed || 'w1', noise: args.noise != null ? args.noise : 0.12 },
       targets: randomTargets(args.random, args.seed || 'w1'),
       timeout: args.timeout,
-      exact: args.exact
+      exact: args.exact,
+      legacy: args.legacy,
+      gm: args.gm
     });
   } else if (args.seed || args.noise != null || args.targets.length) {
     scenarios.push({
@@ -198,12 +204,15 @@ async function runScenario(browser, scenario) {
       world: { seed: args.seed || 'w1', noise: args.noise != null ? args.noise : 0.12 },
       targets: args.targets.length ? args.targets : DEFAULT_TARGETS,
       timeout: args.timeout,
-      exact: args.exact
+      exact: args.exact,
+      legacy: args.legacy,
+      gm: args.gm
     });
   } else {
     scenarios.push({ name: 'normal noise (12%)', world: { seed: 'w1', noise: 0.12 }, targets: DEFAULT_TARGETS, timeout: args.timeout });
     scenarios.push({ name: 'heavy noise (30%), other world', world: { seed: 'w2', noise: 0.3 }, targets: DEFAULT_TARGETS, timeout: args.timeout });
     scenarios.push({ name: 'exact spelling', world: { seed: 'w3', noise: 0.15 }, targets: ['Zorblaxian', 'qUiRkY', 'Hello World'], timeout: args.timeout, exact: true });
+    scenarios.push({ name: 'older game client + GM_xmlhttpRequest', world: { seed: 'w4', noise: 0.12 }, targets: ['Dragon', 'Zorblaxian', 'Hello World'], timeout: args.timeout, legacy: true, gm: true });
   }
   const browser = await chromium.launch();
   let pass = 0, total = 0;

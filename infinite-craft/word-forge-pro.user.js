@@ -1,22 +1,28 @@
 // ==UserScript==
 // @name         Infinite Craft - Word Forge Pro (Auto Combiner v6)
 // @namespace    https://neal.fun/infinite-craft/
-// @version      6.1.0
+// @version      6.2.0
 // @description  Type any word and it gets crafted: looks it up on Infinibrowser and crafts the uploaded recipe (self-healing), or builds brand-new words letter by letter with text tools learned from Infinibrowser. No random combining. Keeps the National Pokedex queue, history and save tools.
 // @match        https://neal.fun/infinite-craft*
 // @run-at       document-start
-// @grant        none
+// @grant        GM_xmlhttpRequest
+// @grant        GM.xmlHttpRequest
+// @grant        unsafeWindow
+// @connect      infinibrowser.wiki
 // ==/UserScript==
 
 (function () {
   'use strict';
   if (typeof document === 'undefined') return;
-  if (window._icAutoInstance) { console.warn('[WordForge] Already running.'); return; }
+  // Page globals (the game's window.IC, ...) live on unsafeWindow when the userscript
+  // manager runs the script in its sandbox; without a sandbox they're on window.
+  const W = (typeof unsafeWindow !== 'undefined' && unsafeWindow) ? unsafeWindow : window;
+  if (W._icAutoInstance) { console.warn('[WordForge] Already running.'); return; }
 
   /* ============================================================
    * Config
    * ============================================================ */
-  const VERSION = '6.1.0';
+  const VERSION = '6.2.0';
 
   // Small settings stay in localStorage (same keys as v5.x so settings carry over).
   // Big learned data (tried pairs, pair results, Infinibrowser cache) lives in IndexedDB
@@ -34,6 +40,7 @@
     altRecipeCache: 'icAutoAltRecipeCache',
     badRecipePairs: 'icAutoBadRecipePairs',
     panelPos: 'icForgePanelPosV6',
+    memVer: 'icForgeMemVer',
     sections: 'icForgeSectionsV6'
   };
 
@@ -115,7 +122,7 @@
       if (src[k] && typeof src[k] === 'object' && !Array.isArray(src[k]) && dst[k] && typeof dst[k] === 'object') mergeOverrides(dst[k], src[k]);
       else dst[k] = src[k];
     }
-  })(C, window.__icForgeConfig);
+  })(C, W.__icForgeConfig);
 
   /* ============================================================
    * Small utilities
@@ -320,6 +327,14 @@
       if (lb && typeof lb === 'object') { for (const k of Object.keys(lb)) this.bad.add(k); migrated = true; }
       const bank = Store.get(KEYS.recipeBank, null);
       if (bank && typeof bank === 'object') this.recipeBank = bank;
+      // 6.0/6.1 crafted through an API the game update changed, so "nothing" results recorded
+      // then can't be trusted. Real results are kept.
+      if ((Store.get(KEYS.memVer, 0) || 0) < 2) {
+        let dropped = 0;
+        for (const [k, v] of Array.from(this.pairs)) if (v === '') { this.pairs.delete(k); dropped++; }
+        if (dropped) this._dirty.add('pairs');
+        Store.set(KEYS.memVer, 2);
+      }
       if (migrated && this.idb) {
         this._dirty.add('tried'); this._dirty.add('pairs'); this._dirty.add('bad');
         await this.flush();
@@ -422,6 +437,39 @@
   }
 
   /* ============================================================
+   * HTTP: Infinibrowser doesn't allow ordinary cross-site requests from the game page, so
+   * use the userscript manager's GM_xmlhttpRequest (needs @connect infinibrowser.wiki);
+   * fall back to fetch where it isn't available.
+   * ============================================================ */
+  const GMX = (() => {
+    try { if (typeof GM_xmlhttpRequest === 'function') return GM_xmlhttpRequest; } catch (e) {}
+    try { if (typeof GM !== 'undefined' && GM && typeof GM.xmlHttpRequest === 'function') return GM.xmlHttpRequest; } catch (e) {}
+    return null;
+  })();
+  function httpGet(url, timeout) {
+    if (GMX) {
+      return new Promise((resolve, reject) => {
+        try {
+          GMX({
+            method: 'GET', url, timeout,
+            headers: { Accept: 'application/json' },
+            onload: (r) => resolve({ status: r.status, text: r.responseText || '', via: 'gm' }),
+            onerror: () => reject(new Error('network')),
+            ontimeout: () => reject(new Error('timeout')),
+            onabort: () => reject(new Error('abort'))
+          });
+        } catch (e) { reject(e); }
+      });
+    }
+    const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), timeout) : null;
+    return fetch(url, { headers: { Accept: 'application/json' }, signal: ctrl ? ctrl.signal : undefined })
+      .then(async (res) => ({ status: res.status, text: await res.text(), via: 'fetch' }))
+      .finally(() => { if (timer) clearTimeout(timer); });
+  }
+  const looksLikeChallenge = (r) => /<html|just a moment|cf-chl|challenge/i.test((r && r.text) || '');
+
+  /* ============================================================
    * Infinibrowser client: throttled, deduplicated, cached, 429-aware
    * Endpoints: /item, /recipe (lineage), /recipes, /uses
    * ============================================================ */
@@ -466,10 +514,21 @@
       this.mem.set(key, { v, t: now(), p: persist !== false });
       if (persist !== false) this._scheduleSave();
     }
+    // Why Infinibrowser can't be used right now, in plain words (or '' when it's fine).
+    problem() {
+      if (this.challengeAt && now() - this.challengeAt < C.ib.offlineCooldown) {
+        return 'Infinibrowser is showing a "checking your browser" page. Open infinibrowser.wiki in a new tab once, then press Start again.';
+      }
+      if (this.offline) {
+        return GMX ? "Can't reach infinibrowser.wiki right now (no connection, or it's blocked on this network)."
+          : 'The browser blocked the request to infinibrowser.wiki. Install this script with Tampermonkey or Violentmonkey and allow its connection to infinibrowser.wiki.';
+      }
+      return '';
+    }
     // Returns parsed JSON, null for a definite "unknown element", throws when unreachable.
     async _fetchJSON(path, params) {
       if (!this.enabled) throw new Error('ib-disabled');
-      if (this.offline) throw new Error('ib-offline');
+      if (this.offline || (this.challengeAt && now() - this.challengeAt < C.ib.offlineCooldown)) throw new Error('ib-offline');
       const url = C.ib.base + path + '?' + new URLSearchParams(params).toString();
       for (let attempt = 0; attempt <= C.ib.retries; attempt++) {
         const start = Math.max(now(), this.nextAt, this.cooldownUntil);
@@ -478,10 +537,7 @@
         this.requests++;
         let res;
         try {
-          const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
-          const timer = ctrl ? setTimeout(() => ctrl.abort(), C.ib.timeout) : null;
-          res = await fetch(url, { headers: { Accept: 'application/json' }, signal: ctrl ? ctrl.signal : undefined });
-          if (timer) clearTimeout(timer);
+          res = await httpGet(url, C.ib.timeout);
         } catch (e) {
           this.failStreak++;
           if (this.failStreak >= 4) { this.offlineAt = now(); throw new Error('ib-offline'); }
@@ -494,21 +550,37 @@
           this.cooldownUntil = now() + Math.min(30000, 900 * Math.pow(2, attempt));
           continue;
         }
+        if ((res.status === 403 || res.status === 503) && looksLikeChallenge(res)) {
+          this.challengeAt = now();
+          throw new Error('ib-challenge');
+        }
         if (res.status >= 500) {
           // Usually a lineage the server can't compute; one quick retry, then "unknown".
           if (attempt >= 1) throw new Error('ib-' + res.status);
           await sleep(800);
           continue;
         }
-        if (!res.ok) { this.failStreak = 0; return null; }
+        if (res.status < 200 || res.status >= 300) { this.failStreak = 0; return null; }
         try {
-          const json = await res.json();
+          const json = JSON.parse(res.text);
           this.failStreak = 0;
           this.offlineAt = 0;
+          this.challengeAt = 0;
+          this.lastOkAt = now();
           return json;
-        } catch (e) { return null; }
+        } catch (e) {
+          if (looksLikeChallenge(res)) { this.challengeAt = now(); throw new Error('ib-challenge'); }
+          return null;
+        }
       }
       throw new Error('ib-unavailable');
+    }
+    // Live connection check (never cached): true, or false with problem() explaining why.
+    async ping() {
+      this.offlineAt = 0;
+      this.challengeAt = 0;
+      this.failStreak = 0;
+      try { await this._fetchJSON('/item', { id: 'Water' }); return true; } catch (e) { if (!this.offline && !this.challengeAt) this.offlineAt = now(); return false; }
     }
     _get(key, path, params, transform, persist) {
       const hit = this._cached(key);
@@ -626,6 +698,7 @@
       this.bySoft = new Map();
       this.objs = new Map();
       this._sig = '';
+      this._sigAt = 0;
       this.version = 0;
       this.dragger = null;
     }
@@ -685,12 +758,33 @@
       this._vm = this._findVM() || v;
       return this._vm;
     }
-    hasApi() { const v = this.vm(); return !!(v && typeof v.craft === 'function'); }
-    _list() {
+    // The current game exposes window.IC (getItems, createInstance, craft, ...); older
+    // versions only had the Vue view-model with craft({text}, {text}).
+    ic() {
+      let ic = null;
+      try { ic = W.IC; } catch (e) {}
+      return ic && typeof ic.getItems === 'function' ? ic : null;
+    }
+    _vmCraft() { const v = this.vm(); return v && typeof v.craft === 'function' ? v : null; }
+    hasApi() {
+      const ic = this.ic();
+      if (ic && typeof ic.createInstance === 'function' && (typeof ic.craft === 'function' || this._vmCraft())) return true;
+      return !!this._vmCraft();
+    }
+    _rawItems() {
+      const ic = this.ic();
+      if (ic) {
+        try { const list = ic.getItems(); if (list && typeof list.length === 'number') return list; } catch (e) {}
+      }
       const v = this.vm();
+      if (v && v.items && typeof v.items.length === 'number') return v.items;
+      return null;
+    }
+    _list() {
+      const list = this._rawItems();
       const names = [], objs = [];
-      if (v && v.items && v.items.length) {
-        for (const it of v.items) {
+      if (list && list.length) {
+        for (const it of list) {
           const t = it && (it.text != null ? it.text : it.name);
           if (t != null && t !== '') { names.push(String(t)); objs.push(it); }
         }
@@ -703,15 +797,19 @@
       return { names, objs };
     }
     _signature() {
-      const v = this.vm();
-      if (v && v.items && v.items.length) {
-        const list = v.items, n = list.length;
+      const list = this._rawItems();
+      if (list && list.length) {
+        const n = list.length;
         const f = list[0] && list[0].text, l = list[n - 1] && list[n - 1].text;
         return 'v' + n + ':' + f + ':' + l;
       }
       return 'd' + document.querySelectorAll(C.itemSel).length;
     }
     refresh(force) {
+      // Inventory only changes through crafts (which force a refresh) or the player, so a
+      // signature check every few ms is plenty, even with huge saves.
+      if (!force && now() - this._sigAt < 40) return false;
+      this._sigAt = now();
       const sig = this._signature();
       if (!force && sig === this._sig) return false;
       const { names, objs } = this._list();
@@ -750,9 +848,16 @@
     emojiOf(name) { const o = this.objs.get(name); return (o && o.emoji) || ''; }
     isDiscovery(name) {
       const o = this.objs.get(name);
-      return !!(o && (o.discovered || o.isNew || o.is_new || o.firstDiscovery));
+      return !!(o && (o.discovery || o.discovered || o.isNew || o.is_new || o.firstDiscovery));
     }
-    instances() { const v = this.vm(); return (v && v.instances) || null; }
+    instances() {
+      const ic = this.ic();
+      if (ic && typeof ic.getInstances === 'function') {
+        try { return ic.getInstances() || []; } catch (e) {}
+      }
+      const v = this.vm();
+      return (v && v.instances) || null;
+    }
     instanceCounts() {
       const out = {};
       const list = this.instances();
@@ -802,7 +907,73 @@
     // Craft a + b. Resolves {result, isNew, timedOut, error}. result null means "Nothing".
     async craft(a, b, opts) {
       opts = opts || {};
-      this.refresh();
+      this.refresh(true);
+      const ic = this.ic();
+      if (ic && typeof ic.createInstance === 'function') return this._craftIC(ic, a, b, opts);
+      return this._craftLegacy(a, b, opts);
+    }
+    _spawnPoint(opts) {
+      if (opts.show && this.dragger) {
+        const s = this.dragger.nextSpot();
+        return { x: s.targetX, y: s.targetY };
+      }
+      const sb = document.querySelector('#sidebar');
+      const sw = sb ? sb.getBoundingClientRect().width : 0;
+      return { x: Math.max(80, (window.innerWidth - sw) / 2), y: Math.max(80, window.innerHeight / 2) };
+    }
+    // Current game: put both items on the board and let the game combine them, exactly like
+    // dragging one onto the other. The game returns { instance } for a result, nothing for Nothing.
+    async _craftIC(ic, a, b, opts) {
+      const A = this.objs.get(a), B = this.objs.get(b);
+      if (!A || !B) return { result: null, error: 'missing-item' };
+      const exactBefore = this.exact;
+      const lenBefore = (this._rawItems() || []).length;
+      const p = this._spawnPoint(opts);
+      const findInst = (text) => {
+        const list = this.instances() || [];
+        for (let i = list.length - 1; i >= 0; i--) if (list[i] && list[i].text === text) return list[i];
+        return null;
+      };
+      const spawn = async (it, dx) => {
+        const inst = await ic.createInstance({ text: it.text, emoji: it.emoji, itemId: it.id, discovery: it.discovery, x: p.x + dx, y: p.y, animate: false });
+        return inst || findInst(it.text);
+      };
+      let ia = null, ib = null, res = null, timedOut = false, error = null;
+      try {
+        ia = await spawn(A, 0);
+        ib = await spawn(B, 12);
+        if (!ia || !ib) throw new Error('could not place items on the board');
+        const v = this._vmCraft();
+        const call = v ? v.craft(ia, ib) : ic.craft(ia, ib);
+        res = await Promise.race([Promise.resolve(call), sleep(C.craftTimeout).then(() => { timedOut = true; return null; })]);
+      } catch (e) { error = e; }
+      let text = null;
+      if (res && typeof res === 'object') {
+        const inst = res.instance || res;
+        if (inst && typeof inst.text === 'string') text = inst.text;
+        else if (typeof res.result === 'string') text = res.result;
+      }
+      if (text === 'Nothing') text = null;
+      if (!text && !error && !timedOut) {
+        const list = this._rawItems() || [];
+        for (let i = lenBefore; i < list.length; i++) {
+          const t = list[i] && list[i].text;
+          if (t && !exactBefore.has(t)) { text = t; break; }
+        }
+      }
+      // Clean up what this craft put on the board (keep the result if "show crafts" is on).
+      try {
+        if (typeof ic.removeInstances === 'function') {
+          const live = new Set(this.instances() || []);
+          const out = res && res.instance;
+          const drop = [ia, ib, opts.show ? null : out].filter((x) => x && live.has(x));
+          if (drop.length) ic.removeInstances(drop);
+        }
+      } catch (e) {}
+      this.refresh(true);
+      return { result: text, isNew: !!(text && !exactBefore.has(text)), timedOut, error };
+    }
+    async _craftLegacy(a, b, opts) {
       const v = this.vm();
       const before = {
         exact: this.exact,
@@ -921,6 +1092,10 @@
       return this.dragNamed(a, spot.sourceX, spot.sourceY);
     }
     async sweep() {
+      const ic = this.game.ic();
+      if (ic && typeof ic.clearInstances === 'function') {
+        try { ic.clearInstances(); this.slot = 0; return true; } catch (e) {}
+      }
       const img = document.querySelector('img[src*="clear.svg"]');
       if (!img) return false;
       const btn = (img.closest && img.closest('button')) || img.parentElement || img;
@@ -1303,7 +1478,7 @@
       this._say(ctx, 'Looking up "' + ctx.target + '" on Infinibrowser...');
       const { found, unknown } = await this._wikiMatches(ctx);
       if (!found.length) {
-        const msg = unknown ? 'Infinibrowser could not be reached' : '"' + ctx.target + '" is not on Infinibrowser yet';
+        const msg = unknown ? (this.ib.problem() || 'Infinibrowser could not be reached') : '"' + ctx.target + '" is not on Infinibrowser yet';
         this._note(ctx, msg);
         if (!ctx.lookupLogged) { ctx.lookupLogged = true; this._plan(ctx, msg + (unknown ? '' : ', so it will be built letter by letter')); }
         return false;
@@ -1918,6 +2093,8 @@
       '.ic-status.s-warn{color:var(--ic-orange);border-color:var(--ic-orange);}',
       '.ic-now{background:var(--ic-surface);border:1px solid var(--ic-border);border-radius:6px;padding:7px 8px;display:none;flex-direction:column;gap:4px;}',
       '.ic-now.show{display:flex;}',
+      '.ic-now.done-ok{border-color:var(--ic-green);}.ic-now.done-ok .ic-now-strategy{color:var(--ic-green);}',
+      '.ic-now.done-bad{border-color:var(--ic-orange);}.ic-now.done-bad .ic-now-strategy{color:var(--ic-orange);}',
       '.ic-now-target{font-weight:700;color:var(--ic-text);font-size:12.5px;word-break:break-word;}',
       '.ic-now-meta{display:flex;justify-content:space-between;gap:6px;font-size:10px;color:var(--ic-text2);}',
       '.ic-now-strategy{color:var(--ic-accent);font-weight:600;}',
@@ -2008,7 +2185,22 @@
       this.renderInfo();
       this.status(this.game.hasApi() ? 'Ready. Type any word and press Start.' : 'Ready (game API not found yet; it may still be loading).', 's-ok');
       window.addEventListener('beforeunload', () => { this.mem.flush(); this.ib.save(); });
+      this.checkConnection();
       setInterval(() => this.renderInfo(), 3000);
+    }
+
+    // Make Infinibrowser problems visible up front instead of letting a run fail silently.
+    async checkConnection() {
+      const ok = await this.ib.ping();
+      this.renderInfo();
+      if (ok) {
+        if (!this.running) this.status((this.game.hasApi() ? 'Ready. ' : '') + 'Connected to Infinibrowser. Type any word and press Start.', 's-ok');
+        return true;
+      }
+      const why = this.ib.problem() || "Can't reach infinibrowser.wiki.";
+      this.status(why, 's-err');
+      this.log('fail', why);
+      return false;
     }
 
     /* ---------- settings ---------- */
@@ -2047,7 +2239,7 @@
       this.speed = v;
       try { localStorage.setItem(KEYS.speed, v); } catch (e) {}
       const p = SPEED_PRESETS[v];
-      if (!window.__icForgeConfig || window.__icForgeConfig.gap == null) { C.gap = p.gap; C.settle = p.settle; }
+      if (!W.__icForgeConfig || W.__icForgeConfig.gap == null) { C.gap = p.gap; C.settle = p.settle; }
       C.step = p.step;
       C.between = p.between;
       const el = this.$('#ic-speed');
@@ -2114,7 +2306,7 @@
       this.syncButtons();
       this.mem.flush();
       this.ib.save();
-      this.hideNow();
+      this.finishNow(msg, cls);
       if (msg) this.status(msg, cls);
       this.renderStats();
     }
@@ -2204,7 +2396,7 @@
       const wait = this.lastCraftAt + C.gap - now();
       if (wait > 0) await sleep(wait);
       if (this.shouldSweep()) await this.sweep();
-      const res = await this.game.craft(a, b, { drag: this.dragEnabled() });
+      const res = await this.game.craft(a, b, { drag: this.dragEnabled(), show: this.dragEnabled() });
       this.lastCraftAt = now();
       this.stats.crafts++;
       // Pair results are global in Infinite Craft, so remembering them is enough; the old
@@ -2243,6 +2435,11 @@
       const failed = [];
       let made = 0;
       try {
+        if (this.ib.problem()) {
+          this.status('Checking the connection to Infinibrowser...', 's-run');
+          if (!(await this.checkConnection())) this.log('fail', 'Continuing with saved recipes and items you already have.');
+          await this.checkpoint(token);
+        }
         for (;;) {
           await this.checkpoint(token);
           const pending = this.getTargets().filter((t) => failed.indexOf(t) < 0);
@@ -2490,6 +2687,8 @@
       const next = this._snapshot(names);
       this.saveSnapshot = next;
       if (!prev || !names.length) return;
+      // Growing from (almost) nothing is the game finishing its load, not a different save.
+      if (prev.count < C.saveSwitch.minCount) return;
       if (now() - this.saveSwitchAt < C.saveSwitch.cooldown) return;
       if (prev.count < C.saveSwitch.minCount && next.count < C.saveSwitch.minCount) return;
       let shared = 0;
@@ -2632,11 +2831,25 @@
       el.className = 'ic-status' + (cls ? ' ' + cls : '');
     }
     showNow(target) {
+      this.$('#ic-now').classList.remove('done-ok', 'done-bad');
       this._nowState = { target, strategy: '', msg: 'Starting...', progress: 0, round: 1, level: '', crafts: 0, started: now() };
       this.$('#ic-now').classList.add('show');
       this._renderNow();
     }
-    hideNow() { this.$('#ic-now').classList.remove('show'); this._nowState = null; }
+    hideNow() { this.$('#ic-now').classList.remove('show'); this.$('#ic-now').classList.remove('done-ok', 'done-bad'); this._nowState = null; }
+    // Leave the card up with how the run ended (and why), until the next run starts.
+    finishNow(msg, cls) {
+      const card = this.$('#ic-now');
+      if (!msg || !this._nowState) { this.hideNow(); return; }
+      if (this._nowTimer) { clearTimeout(this._nowTimer); this._nowTimer = null; }
+      const bad = cls === 's-err' || cls === 's-warn';
+      card.classList.remove('done-ok', 'done-bad');
+      card.classList.add(bad ? 'done-bad' : 'done-ok');
+      this.$('#ic-now-strategy').textContent = bad ? 'Stopped' : 'Done';
+      this.$('#ic-now-msg').textContent = msg;
+      this.$('#ic-now-bar').style.width = bad ? '0%' : '100%';
+      this._nowState = null;
+    }
     forgeStatus(ctx, msg, progress) {
       if (!this._nowState) this.showNow(ctx.target);
       const s = this._nowState;
@@ -2676,9 +2889,13 @@
     renderInfo() {
       const el = this.$('#ic-info');
       if (!el) return;
-      el.textContent = 'Known pair results: ' + this.mem.pairs.size + ' · Text tools learned: ' + this.tools.size +
-        ' · Infinibrowser: ' + (this.ib.offline ? 'unreachable' : this.ib.requests + ' requests' + (this.ib.rateLimited ? ', ' + this.ib.rateLimited + ' rate-limited' : '')) +
-        ' · Storage: ' + (this.mem.idb ? 'IndexedDB' : 'memory only');
+      const ib = this.ib.problem() ? (this.ib.challengeAt ? 'needs a browser check' : 'unreachable')
+        : (this.ib.lastOkAt ? 'connected' : 'not checked yet') + (GMX ? ' (via userscript manager)' : ' (direct)');
+      const game = this.game.ic() ? 'connected' : (this.game.hasApi() ? 'connected (older version)' : 'not found yet');
+      el.textContent = 'Game: ' + game + ' \u00b7 Infinibrowser: ' + ib + ', ' + this.ib.requests + ' requests' +
+        (this.ib.rateLimited ? ', ' + this.ib.rateLimited + ' rate-limited' : '') +
+        ' \u00b7 Known pair results: ' + this.mem.pairs.size + ' \u00b7 Text tools learned: ' + this.tools.size +
+        ' \u00b7 Storage: ' + (this.mem.idb ? 'IndexedDB' : 'memory only');
     }
     log(type, msg) {
       const row = { type, msg, time: clock(), ts: now() };
@@ -2770,7 +2987,7 @@
         '<div class="ic-section-title">Never use these items</div>',
         '<textarea class="ic-textarea" id="ic-exclude" rows="2" placeholder="One per line"></textarea>',
         chk('autoSweep', 'Auto sweep board when laggy'),
-        chk('dragEnabled', 'Show dragging animation (slower)'),
+        chk('dragEnabled', 'Show crafts on the board (slower)'),
         chk('soundEnabled', 'Sound on discovery'),
         '<div class="ic-section-title" style="margin-top:4px;">Run a recipe</div>',
         '<textarea class="ic-textarea" id="ic-recipe-text" rows="2" placeholder="Water + Fire = Steam&#10;Steam + Earth = Mud"></textarea>',
@@ -2910,7 +3127,7 @@
   }
 
   const app = new App();
-  window._icAutoInstance = app;
+  W._icAutoInstance = app;
   installKeyGuard(app);
   const boot = () => app.init().catch((e) => console.error('[WordForge] init failed', e));
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once: true });
