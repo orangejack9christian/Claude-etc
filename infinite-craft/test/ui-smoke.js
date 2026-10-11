@@ -149,6 +149,12 @@ async function check(cond, label) {
   await page.click('#ic-stop');
   await page.fill('#ic-target', '');
 
+  // Copy Debug Info: the text names the word, why it's stuck, and the pairs it tried.
+  const dbg = await app(() => window._icAutoInstance.debugInfo());
+  await check(/Target: naïve/.test(dbg) && /Notes:/.test(dbg) && /Pairs \(a \+ b = result/.test(dbg) && / = .+ (new|mem)$/m.test(dbg), 'debug info has the target, notes and tried pairs');
+  await page.click('#ic-debug');
+  await check(await page.waitForFunction(() => /debug info/i.test(document.querySelector('#ic-status').textContent), null, { timeout: 5000 }).then(() => true, () => false), 'Copy Debug Info button copies (or saves) it');
+
   // Start with an empty box never combines anything at random.
   await page.fill('#ic-target', '');
   const before = await app(() => window._icAutoInstance.stats.crafts);

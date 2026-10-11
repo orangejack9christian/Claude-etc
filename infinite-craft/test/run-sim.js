@@ -8,6 +8,7 @@
 //   node test/run-sim.js --legacy ...       # simulate the pre-2026 game client
 //   node test/run-sim.js --gm ...           # route Infinibrowser calls through a GM_xmlhttpRequest shim
 //   SIM_VERBOSE=1 node test/run-sim.js ...  # print the forge log for each target
+//   SIM_DEBUG=out.txt node test/run-sim.js ... # save the panel's Copy Debug Info text per target
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -16,7 +17,7 @@ const SimWorld = require('./sim-world.js');
 const { installGame } = require('./sim-page.js');
 
 const ROOT = path.join(__dirname, '..');
-const SCRIPT = fs.readFileSync(path.join(ROOT, 'word-forge-pro.user.js'), 'utf8');
+const SCRIPT = fs.readFileSync(process.env.SIM_SCRIPT || path.join(ROOT, 'word-forge-pro.user.js'), 'utf8');
 const VERBOSE = !!process.env.SIM_VERBOSE;
 
 const DEFAULT_TARGETS = [
@@ -75,6 +76,7 @@ function parseArgs(argv) {
     else if (a === '--no-space-tool') out.world.spaceTool = false;
     else if (a === '--words') out.world.extraWords = argv[++i].split(',');
     else if (a === '--phrase-rate') out.world.phraseRate = parseFloat(argv[++i]);
+    else if (a === '--jam') out.world.jam = argv[++i].split(',').map((x) => x.split(':'));
     else if (a === '--random') out.random = parseInt(argv[++i], 10) || 20;
     else out.targets.push(a);
   }
@@ -172,7 +174,8 @@ async function runScenario(browser, scenario) {
       if (!ok) for (const line of info.crafted) console.log('      craft: ' + line);
       console.log('      status: ' + info.status);
     }
-    if (ok && VERBOSE && info.recipe) console.log('      recipe:\n        ' + info.recipe.split('\n').join('\n        '));
+    if (ok && VERBOSE && info.recipe) console.log('      recipe:\n        ' + info.recipe.split('\n').join('\n        '));    // SIM_DEBUG=file.txt appends the panel's "Copy Debug Info" text for every target.
+    if (process.env.SIM_DEBUG) fs.appendFileSync(process.env.SIM_DEBUG, (await page.evaluate(() => window._icAutoInstance.debugInfo())) + '\n\n');
   }
   if (!scenario.legacy) {
     const left = await page.evaluate(() => window.IC.getInstances().length);
@@ -216,6 +219,7 @@ async function runScenario(browser, scenario) {
     scenarios.push({ name: 'heavy noise (30%), other world', world: { seed: 'w2', noise: 0.3 }, targets: DEFAULT_TARGETS, timeout: args.timeout });
     scenarios.push({ name: 'exact spelling', world: { seed: 'w3', noise: 0.15 }, targets: ['Zorblaxian', 'qUiRkY', 'Hello World'], timeout: args.timeout, exact: true });
     scenarios.push({ name: 'names with no space tool (like "Mr. Eremey Jeremy")', world: { seed: 'w5', noise: 0.12, spaceTool: false, phraseRate: 0.6, extraWords: ['Mr.', 'Jeremy', 'Ender', 'Steve'] }, targets: ['Mr. Eremey Jeremy', 'Ender Dragon', 'Steve Zorblax Jeremy'], timeout: args.timeout });
+    scenarios.push({ name: 'a spot where adding a letter always fails (stuck at "mr. Erem")', world: { seed: 'w6', noise: 0.12, phraseRate: 0.6, extraWords: ['Mr.', 'Jeremy'], jam: [['erem', 'e']] }, targets: ['Mr. Eremey Jeremy', 'Zeremel'], timeout: args.timeout });
     scenarios.push({ name: 'older game client + GM_xmlhttpRequest', world: { seed: 'w4', noise: 0.12 }, targets: ['Dragon', 'Zorblaxian', 'Hello World'], timeout: args.timeout, legacy: true, gm: true });
   }
   const browser = await chromium.launch();

@@ -1,6 +1,6 @@
 {
   "name": "infinite-craft-word-forge",
-  "version": "6.4.0",
+  "version": "6.5.0",
   "private": true,
   "description": "Word Forge Pro userscript for Infinite Craft, plus a game simulator to test it",
   "scripts": {

@@ -53,9 +53,18 @@ waits it re-checks Infinibrowser for new uploads. It never guesses at random.
    append letters or chunks (`'b'`, `.l`, `“ian”`), then unquote the result
    (`"zorblaxian"` → `Zorblaxian`). It prefers tools you already have, then tools with short
    recipes. When a letter tool misfires it backs up and tries another tool or capitalization.
-   When the text can't be unquoted, it builds another variant. Overshoots like `"crab"`
-   when it wanted `"cra"` are repaired with a backspace tool when one exists. The log shows
-   the plan before it starts.
+   When the text can't be unquoted, it builds another variant. Overshoots of up to three
+   letters (`"crab"` when it wanted `"cra"`) are repaired with a backspace tool when one
+   exists. The log shows the plan before it starts.
+
+   **When one spot keeps failing** (every tool for `e` on `"mr. Erem"` gives something else),
+   later rounds do three things. They search Infinibrowser for how other people added that
+   letter after the same ending (`"rem"` → `"reme"`) and try those tools. They try every
+   quote style (`'e'`, `.e`, `“e”`, `‘e’`, `"e"`). And they build the rest as its own quoted
+   piece (`“ey Jeremy”`) and attach it in one craft (`"mr. Erem"` + `“ey Jeremy”`), so the
+   failing pair is never needed. If the word comes out with the wrong capitalization
+   (`Mr. EreMey jeremy`), it spends one more round going for exactly what you typed and keeps
+   the first result if that doesn't work.
 
 ### Text tools are learned, not hard-coded
 
@@ -80,12 +89,22 @@ exist.
 - **National Pokedex**: same queue as before, now using every strategy.
 - **Settings & Data**: exclude list, sweep, drag animation, sound, **Run a recipe** (paste
   `A + B = C` lines), **Copy Last Recipe**, export/import, re-learn tools, clear learned data,
-  re-scan save, and an optional **Explore Randomly** button (the old v5 random combining).
+  re-scan save, **Copy Debug Info** (what it's building, why it's stuck, and the last 2000
+  pairs it tried; paste that when reporting a word it can't make), and an optional
+  **Explore Randomly** button (the old v5 random combining).
   Explore only runs if you press that button; **Start** with an empty box just asks for a
   word.
 
 ## Changelog
 
+- **6.5.0**: Gets past spots where every letter tool fails. Before, once every known way of
+  adding the next letter had failed on the text it had, it waited and retried the same
+  things forever (stuck at `"mr. Erem"`). Now later rounds search Infinibrowser for tools
+  others used in that exact spot. They try more quote styles and longer chunks, and build
+  the rest of the word as a separate quoted piece to attach in one craft. Overshoots of up
+  to three letters are repaired. Phrase parts get the same wider searches as the whole word.
+  A word made with stray capitals gets one follow-up round for the exact capitalization. New
+  **Copy Debug Info** button.
 - **6.4.0**: Never gives up. With "Never give up" on, rounds continue indefinitely and
   widen each time. When stuck, it waits and retries (re-checking Infinibrowser for new
   uploads) and the card shows the most specific blocker, not "not on Infinibrowser yet".
@@ -157,6 +176,8 @@ node test/run-sim.js      # default scenarios
 node test/run-sim.js --random 50 --seed r2              # 50 random words
 node test/run-sim.js --seed w9 --noise 0.3 "Fire Truck" Zorblaxian
 SIM_VERBOSE=1 node test/run-sim.js Qwxyzzy   # print the forge log and the recipe used
+SIM_DEBUG=debug.txt node test/run-sim.js Qwxyzzy   # save the Copy Debug Info text per word
+node test/run-sim.js --jam erem:e "Mr. Eremey Jeremy"   # every letter tool for "e" after "erem" misfires
 node test/ui-smoke.js     # clicks through every panel control
 node test/keyboard.js     # typing in the panel isn't stolen by the game's search bar
 node test/connection.js   # blocked / "checking your browser" Infinibrowser, recovery, relay tab

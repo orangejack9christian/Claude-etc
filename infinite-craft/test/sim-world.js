@@ -72,6 +72,7 @@
       rateLimitEvery: 30,   // every Nth Infinibrowser request answers 429
       spaceTool: true,      // false: no tool appends a space, so phrases must be combined
       extraWords: [],       // extra words in the community word tree, e.g. ['Mr.', 'Jeremy']
+      jam: [],              // [['erem', 'e']]: one-letter tools adding 'e' to text ending in "erem" misfire
       names: {}
     }, cfg || {});
     const N = Object.assign({
@@ -133,6 +134,11 @@
       const ps = parse(s), pt = parse(t);
       const quoted = ps.w === 'dq' || ps.w === 'cq';
       if (quoted && ps.core) {
+        // A spot where every one-letter tool misfires (the AI insists on something else).
+        if (pt.core.length === 1 && (pt.w === 'sq' || pt.w === 'dot' || pt.w === 'cq') && tools.has(t) &&
+            cfg.jam.some(([after, c]) => ps.core.toLowerCase().endsWith(after) && pt.core.toLowerCase() === c)) {
+          return ALL[Math.floor(rnd(S + 'jam' + key(s, t)) * ALL.length)];
+        }
         if (pt.w === 'sq' && tools.has(t)) return wrap(ps.core + pt.core, ps.w);
         if (pt.w === 'dot' && tools.has(t)) return wrap(ps.core + pt.core, ps.w);
         if (pt.w === 'cq' && ps.w === 'dq' && pt.core) return wrap(ps.core + pt.core, 'cq');
