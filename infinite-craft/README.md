@@ -10,7 +10,9 @@ whatever. It replaces "Auto Combiner Pro v5.1" and keeps everything that version
 2. Disable or remove the old "Auto Combiner Pro v51" script, so the two don't both start.
 3. Create a new script and paste in `word-forge-pro.user.js`, or open the raw file URL and let
    the extension install it.
-4. Open neal.fun/infinite-craft, type words into the panel, and press **Start** (or Ctrl+Enter).
+4. Open neal.fun/infinite-craft, click the panel's **Words to make** box, type your words, and
+   press **Start** (or Ctrl+Enter). Press Esc to leave the box; typing anywhere else goes to
+   the game's search bar as usual.
 
 Your v5.x settings, targets, exclude list, saved recipes, pair history and Pokedex progress
 are picked up automatically.
@@ -64,6 +66,13 @@ exist.
 
 With no targets, **Start** explores (newest items first), as v5 did.
 
+## Changelog
+
+- **6.0.1**: Typing in the panel's boxes no longer jumps to the game's search bar. Infinite
+  Craft sends all typing outside an `<input>` to its search; the script now stops keys
+  typed in the panel before the game sees them, and runs at `document-start` so that
+  listener is registered first.
+
 ## What changed from v5.1
 
 - New word engine (above). v5 could only follow Infinibrowser recipes, plus random combining.
@@ -101,9 +110,10 @@ node test/run-sim.js --random 50 --seed r2              # 50 random words
 node test/run-sim.js --seed w9 --noise 0.3 "Fire Truck" Zorblaxian
 SIM_VERBOSE=1 node test/run-sim.js Qwxyzzy   # print the forge log and the recipe used
 node test/ui-smoke.js     # clicks through every panel control
+node test/keyboard.js     # typing in the panel isn't stolen by the game's search bar
 ```
 
-Latest results with v6.0.0:
+Latest results (v6.0.0 engine, v6.0.1 keyboard fix):
 
 | Run | Result |
 |---|---|
@@ -111,6 +121,7 @@ Latest results with v6.0.0:
 | 50 random words, 12% tool noise | 50/50, avg 19 crafts per word (max 70) |
 | 50 random words, 30% tool noise | 50/50, avg 34 crafts per word (max 194) |
 | UI checks (v5 migration, pause/skip/stop, export/import, Pokedex, explore, drag) | 28/28 |
+| Keyboard checks (typing stays in the panel; outside it still goes to game search) | 11/11 |
 
 These are simulator results. The real game's AI and Infinibrowser's data will behave
 differently, so expect different craft counts.

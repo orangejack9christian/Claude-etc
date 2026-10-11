@@ -1,12 +1,12 @@
 {
   "name": "infinite-craft-word-forge",
-  "version": "6.0.0",
+  "version": "6.0.1",
   "private": true,
   "description": "Word Forge Pro userscript for Infinite Craft, plus a game simulator to test it",
   "scripts": {
-    "test": "node test/run-sim.js && node test/ui-smoke.js",
+    "test": "node test/run-sim.js && node test/ui-smoke.js && node test/keyboard.js",
     "test:random": "node test/run-sim.js --random 40 --seed r1 && node test/run-sim.js --random 40 --seed r5 --noise 0.3",
-    "test:ui": "node test/ui-smoke.js"
+    "test:ui": "node test/ui-smoke.js && node test/keyboard.js"
   },
   "devDependencies": {
     "playwright": "^1.56.1"

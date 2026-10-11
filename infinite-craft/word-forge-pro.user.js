@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Infinite Craft - Word Forge Pro (Auto Combiner v6)
 // @namespace    https://neal.fun/infinite-craft/
-// @version      6.0.0
+// @version      6.0.1
 // @description  Type any word and it gets crafted: self-healing Infinibrowser lineages, compound splitting, letter-by-letter string building with auto-learned text tools, and guided search. Keeps the auto combiner, National Pokedex queue, history and save tools.
 // @match        https://neal.fun/infinite-craft*
-// @run-at       document-idle
+// @run-at       document-start
 // @grant        none
 // ==/UserScript==
 
@@ -16,7 +16,7 @@
   /* ============================================================
    * Config
    * ============================================================ */
-  const VERSION = '6.0.0';
+  const VERSION = '6.0.1';
 
   // Small settings stay in localStorage (same keys as v5.x so settings carry over).
   // Big learned data (tried pairs, pair results, Infinibrowser cache) lives in IndexedDB
@@ -2912,7 +2912,6 @@
       $('#ic-collapse').onclick = () => { this.opt.collapsed = !this.opt.collapsed; this.saveOptions(); this.applyOptionsToUI(); };
       $('#ic-speed').onchange = (e) => this.setSpeed(e.target.value);
       $('#ic-target').addEventListener('input', () => { this.saveDrafts(); this.updateLookup(); });
-      $('#ic-target').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); this.start(); } });
       $('#ic-exclude').addEventListener('change', () => this.saveExclude());
       $('#ic-recipe-run').onclick = () => this.runPastedRecipe();
       $('#ic-copy-recipe').onclick = () => this.copyRecipe();
@@ -2970,6 +2969,17 @@
       // Keep the game from treating clicks/drags inside the panel as board input.
       for (const ev of ['mousedown', 'pointerdown', 'touchstart', 'wheel']) this.panel.addEventListener(ev, (e) => e.stopPropagation());
     }
+    // Keys typed inside the panel never reach the game (see installKeyGuard), so panel
+    // shortcuts are handled here: Ctrl/Cmd+Enter starts, Esc leaves the field.
+    onPanelKey(e) {
+      const t = e.target;
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && t && t.id === 'ic-target') {
+        e.preventDefault();
+        this.start();
+      } else if (e.key === 'Escape' && t && typeof t.blur === 'function') {
+        t.blur();
+      }
+    }
     restorePanelPos() {
       const pos = Store.get(KEYS.panelPos, null);
       if (pos && pos.left && pos.top) {
@@ -2984,7 +2994,26 @@
   /* ============================================================
    * Boot
    * ============================================================ */
+  // Infinite Craft sends any typing that isn't in an <input> to its search bar, which stole
+  // keystrokes from the panel's text boxes. Stop key events that start inside the panel at
+  // the window in the capture phase, before any game listener sees them (this runs at
+  // document-start, so it is registered first). The browser still types the text into our
+  // field because the default action isn't cancelled.
+  function installKeyGuard(app) {
+    const inUI = (t) => !!(t && t.closest && t.closest('#ic-panel, #ic-log'));
+    for (const type of ['keydown', 'keypress', 'keyup', 'paste', 'copy', 'cut']) {
+      window.addEventListener(type, (e) => {
+        if (!inUI(e.target)) return;
+        e.stopImmediatePropagation();
+        if (type === 'keydown') app.onPanelKey(e);
+      }, true);
+    }
+  }
+
   const app = new App();
   window._icAutoInstance = app;
-  app.init().catch((e) => console.error('[WordForge] init failed', e));
+  installKeyGuard(app);
+  const boot = () => app.init().catch((e) => console.error('[WordForge] init failed', e));
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once: true });
+  else boot();
 })();
