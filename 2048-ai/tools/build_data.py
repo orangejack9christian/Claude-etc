@@ -92,9 +92,14 @@ def main(run, out):
         e = json.load(open(path))
         e["name"] = os.path.basename(path)[5:-5]
         evals.append(e)
-    evals.sort(key=lambda e: (e.get("time_ms", 0) > 0, e.get("time_ms", 0), e["depth"]))
+    evals.sort(key=lambda e: (e.get("time_ms", 0) > 0, e.get("time_ms", 0), e["depth"], e.get("extra", 0)))
     games_of = lambda e: [json.loads(l) for l in open(os.path.join(run, f"eval_{e['name']}.jsonl"))]
-    search_name = lambda e: f"{e['time_ms'] / 1000:g} s per move" if e.get("time_ms", 0) > 0 else f"depth {e['depth']} search"
+    def search_name(e):
+        if e.get("time_ms", 0) > 0:
+            return f"{e['time_ms'] / 1000:g} s per move"
+        if e.get("extra"):
+            return f"depth {e['depth']}-{e['depth'] + 2 * e['extra']} search"
+        return f"depth {e['depth']} search"
 
     n = meta["games"]
     d1 = [e for e in evals if e["depth"] == 1 and not e.get("time_ms")]
@@ -106,8 +111,8 @@ def main(run, out):
     showcase = replays[-1]["key"]
     searched = [e for e in evals if e["depth"] >= 2 or e.get("time_ms", 0) > 0]
     if searched:
-        deep = max((e for e in searched if e["games"] >= 20), key=lambda e: (e.get("time_ms", 0), e["depth"]),
-                   default=searched[-1])
+        deep = max((e for e in searched if e["games"] >= 20),
+                   key=lambda e: (e.get("time_ms", 0), e["depth"], e.get("extra", 0)), default=searched[-1])
         games = games_of(deep)
         replays.append({"key": "typical", "trained": None, "title": f"Median game, {search_name(deep)}",
                         "label": f"median of {len(games)} test games with {search_name(deep)}",
@@ -138,7 +143,13 @@ def main(run, out):
         "weightFiles": sorted(os.path.basename(p) for p in glob.glob(os.path.join(out, "net-*.txt"))),
     }
     meta_out["final"] = final
-    data = {"meta": meta_out, "log": bin_log(log), "replays": replays, "eval": evals, "showcase": showcase}
+    meta_out["stages"] = meta.get("stages", 1)
+    events = []
+    for fname, label in (("restart_from.txt", "Endgame practice starts"), ("stages_from.txt", "Endgame network added")):
+        path = os.path.join(run, fname)
+        if os.path.exists(path):
+            events.append({"games": int(open(path).read().strip()), "label": label})
+    data = {"events": events, "meta": meta_out, "log": bin_log(log), "replays": replays, "eval": evals, "showcase": showcase}
     with open(os.path.join(out, "data.json"), "w") as f:
         json.dump(data, f, separators=(",", ":"))
     print(f"wrote {out}/data.json: {len(data['log'])} chart points, {len(replays)} replays, "

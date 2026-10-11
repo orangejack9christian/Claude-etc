@@ -32,6 +32,7 @@ struct Options {
   std::string resume;
   int record_per_milestone = 3;
   int restarts = 0;  // games started from the middle of the previous one, per fresh game
+  int stages = 1;    // 2 adds endgame weights used once a 16384 tile is on the board
 };
 
 static Options opt;
@@ -201,6 +202,7 @@ int main(int argc, char** argv) {
     else if (a == "--resume") opt.resume = nxt();
     else if (a == "--record") opt.record_per_milestone = std::stoi(nxt());
     else if (a == "--restarts") opt.restarts = std::stoi(nxt());
+    else if (a == "--stages") opt.stages = std::stoi(nxt());
     else {
       fprintf(stderr, "unknown option %s\n", a.c_str());
       return 1;
@@ -224,6 +226,10 @@ int main(int argc, char** argv) {
   } else {
     net.alloc(true, opt.tc, opt.oi);
   }
+  if (opt.stages == 2 && net.stages == 1) {
+    net.add_endgame_stage();
+    printf("added endgame stage at %" PRIu64 " games\n", net.games);
+  }
   log_file = fopen(opt.log.c_str(), appending ? "a" : "w");
   if (!appending) {
     fprintf(log_file, "games,seconds,avg_score,max_score,avg_moves,r2048,r4096,r8192,r16384,r32768,r1024,moves_per_sec\n");
@@ -243,8 +249,8 @@ int main(int argc, char** argv) {
   }
   t0 = Clock::now();
   last_log_time = now_s();
-  printf("training: threads=%d alpha=%.3f tc=%d oi=%.0f restarts=%d hours=%.2f\n", opt.threads, opt.alpha, opt.tc,
-         opt.oi, opt.restarts, opt.hours);
+  printf("training: threads=%d alpha=%.3f tc=%d oi=%.0f restarts=%d stages=%d hours=%.2f\n", opt.threads, opt.alpha,
+         opt.tc, opt.oi, opt.restarts, net.stages, opt.hours);
   fflush(stdout);
 
   if (next_milestone == 0) {

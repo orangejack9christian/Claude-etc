@@ -8,7 +8,8 @@
 #   tools/release.sh [run_dir]        e.g. tools/release.sh runs/main
 # Env: FINAL=1 once training has finished (labels the last stage "Fully trained")
 #      PRUNE (min updates to keep a weight, default 16)
-#      EVALS (search settings to test as depth:games or t<ms>:games, default "1:2000 2:1000 3:200")
+#      EVALS (search settings to test as depth:games, <depth>x<extra>:games or t<ms>:games;
+#             default "1:2000 2:1000 3:200")
 set -euo pipefail
 cd "$(dirname "$0")/.."
 RUN=${1:-runs/main}
@@ -29,7 +30,8 @@ for spec in $EVALS; do
   name=${spec%%:*}
   games=${spec#*:}
   case $name in
-    t*) args="--time ${name#t}" ;;
+    t*) args="--time ${name#t}" ;;                         # t100: 100 ms per move
+    *x*) args="--depth ${name%x*} --extra ${name#*x}" ;;   # 3x1: depth 3, +1 when few cells are empty
     *) args="--depth $name" ;;
   esac
   build/play --net "$RUN/net.bin" $args --games "$games" --threads "$THREADS" --seed 777 \

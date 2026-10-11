@@ -8,6 +8,7 @@
 #pragma once
 #include <cmath>
 #include <cstdio>
+#include <algorithm>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -23,7 +24,9 @@ struct Net {
   static constexpr int NC = 6;          // cells per pattern
   static constexpr int NF = NP * NI;    // active features per board
   static constexpr uint32_t PSIZE = 1u << (4 * NC);
-  static constexpr size_t SIZE = (size_t)NP * PSIZE;
+  static constexpr size_t SIZE = (size_t)NP * PSIZE;  // weights per stage
+  // Optional second stage: separate weights once a 16384 tile is on the board.
+  static constexpr int STAGE_TILE = 14;
   static constexpr int PATTERNS[NP][NC] = {
       {0, 1, 2, 3, 4, 5},   // top row + two below
       {4, 5, 6, 7, 8, 9},   // second row + two below
@@ -39,6 +42,11 @@ struct Net {
   float winit = 0;               // initial value of every weight
   uint64_t games = 0;            // games trained so far
   bool tc = false;
+  int stages = 1;
+
+  // True once the board holds a tile of 2^14 or more: bits 1-3 of some nibble all set.
+  static inline bool late(board_t b) { return (b & (b >> 1) & (b >> 2) & 0x2222222222222222ULL) != 0; }
+  inline uint32_t stage_base(board_t b) const { return stages > 1 && late(b) ? (uint32_t)SIZE : 0; }
 
   Net() {
     for (int p = 0; p < NP; p++) {
@@ -72,6 +80,20 @@ struct Net {
     }
   }
 
+  // Turn a one-stage network into two: the endgame stage starts as a copy of the
+  // main weights, with fresh learning-rate accumulators and update counts.
+  void add_endgame_stage() {
+    if (stages != 1) return;
+    w.resize(2 * SIZE);
+    std::copy(w.begin(), w.begin() + SIZE, w.begin() + SIZE);
+    if (!cnt.empty()) cnt.resize(2 * SIZE, 0);
+    if (tc) {
+      E.resize(2 * SIZE, 0.f);
+      A.resize(2 * SIZE, 0.f);
+    }
+    stages = 2;
+  }
+
   inline void ids(board_t b, uint32_t* out) const {
     for (int f = 0; f < NF; f++) {
       const uint8_t* s = shift[f];
@@ -80,6 +102,9 @@ struct Net {
                      ((uint32_t)((b >> s[4]) & 0xF) << 16) | ((uint32_t)((b >> s[5]) & 0xF) << 20);
       out[f] = base[f] + idx;
     }
+    uint32_t sb = stage_base(b);
+    if (sb)
+      for (int f = 0; f < NF; f++) out[f] += sb;
   }
 
   inline float value(board_t b) const {
@@ -131,7 +156,7 @@ struct Net {
     uint32_t np, ni, nc, has_tc;
     int32_t patterns[NP][NC];
     float winit;
-    uint32_t pad;
+    uint32_t stages;  // 0 in files written before stages existed
     uint64_t games;
   };
 
@@ -148,18 +173,20 @@ struct Net {
     h.has_tc = tc ? 1 : 0;
     memcpy(h.patterns, PATTERNS, sizeof h.patterns);
     h.winit = winit;
+    h.stages = stages;
     h.games = games;
+    size_t n = SIZE * stages;
     fwrite(&h, sizeof h, 1, f);
-    fwrite(w.data(), sizeof(float), SIZE, f);
-    if (cnt.size() == SIZE)
-      fwrite(cnt.data(), sizeof(uint16_t), SIZE, f);
+    fwrite(w.data(), sizeof(float), n, f);
+    if (cnt.size() == n)
+      fwrite(cnt.data(), sizeof(uint16_t), n, f);
     else {
-      std::vector<uint16_t> z(SIZE, 0);
-      fwrite(z.data(), sizeof(uint16_t), SIZE, f);
+      std::vector<uint16_t> z(n, 0);
+      fwrite(z.data(), sizeof(uint16_t), n, f);
     }
     if (tc) {
-      fwrite(E.data(), sizeof(float), SIZE, f);
-      fwrite(A.data(), sizeof(float), SIZE, f);
+      fwrite(E.data(), sizeof(float), n, f);
+      fwrite(A.data(), sizeof(float), n, f);
     }
     fclose(f);
     if (rename(tmp.c_str(), path.c_str()) != 0) throw std::runtime_error("rename failed: " + path);
@@ -177,17 +204,21 @@ struct Net {
     winit = h.winit;
     games = h.games;
     tc = h.has_tc != 0;
-    w.resize(SIZE);
-    if (fread(w.data(), sizeof(float), SIZE, f) != SIZE) throw std::runtime_error("short read");
+    stages = h.stages ? (int)h.stages : 1;
+    size_t n = SIZE * stages;
+    w.resize(n);
+    if (fread(w.data(), sizeof(float), n, f) != n) throw std::runtime_error("short read");
     if (what >= 1) {
-      cnt.resize(SIZE);
-      if (fread(cnt.data(), sizeof(uint16_t), SIZE, f) != SIZE) throw std::runtime_error("short read");
+      cnt.resize(n);
+      if (fread(cnt.data(), sizeof(uint16_t), n, f) != n) throw std::runtime_error("short read");
+    } else if (fseek(f, (long)(sizeof(uint16_t) * n), SEEK_CUR) != 0) {
+      throw std::runtime_error("seek failed");
     }
     if (what >= 2 && tc) {
-      E.resize(SIZE);
-      A.resize(SIZE);
-      if (fread(E.data(), sizeof(float), SIZE, f) != SIZE) throw std::runtime_error("short read");
-      if (fread(A.data(), sizeof(float), SIZE, f) != SIZE) throw std::runtime_error("short read");
+      E.resize(n);
+      A.resize(n);
+      if (fread(E.data(), sizeof(float), n, f) != n) throw std::runtime_error("short read");
+      if (fread(A.data(), sizeof(float), n, f) != n) throw std::runtime_error("short read");
     }
     fclose(f);
   }

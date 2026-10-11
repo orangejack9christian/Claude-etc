@@ -21,9 +21,13 @@ the strongest 2048 programs.
 move with the best reward + V(afterstate)), then walks the game backwards nudging each
 afterstate's value toward the reward of the next move plus the next afterstate's value.
 Temporal coherence (TC) gives each weight its own adaptive learning rate. Four threads
-share the weights lock-free. After the first 506K games, training switched on the
-restart strategy: each fresh game is followed by three games that start from the middle
-of the previous one, so the endgame gets more practice.
+share the weights lock-free. Two later additions target the endgame, where games were
+dying right after the 16384 tile:
+
+- From game 506K, the restart strategy: each fresh game is followed by three games that
+  start from the middle of the previous one, so the endgame gets more practice.
+- From game 616K, a second stage: once a 16384 tile is on the board the network switches
+  to its own endgame weights (initialised as a copy of the main ones).
 
 **Search: expectimax.** Move nodes take the best move, chance nodes average over every
 empty cell receiving a 2 (90%) or 4 (10%). Like a chess engine it uses iterative
@@ -56,13 +60,14 @@ make test
 # train (resumable; SIGINT/SIGTERM saves a checkpoint)
 mkdir -p runs/main && cd runs/main
 ../../build/train --threads 4 --hours 2 --tc --alpha 1.0 --out weights.bin
-../../build/train --threads 4 --hours 2 --tc --alpha 1.0 --restarts 3 --resume weights.bin
+../../build/train --threads 4 --hours 2 --tc --alpha 1.0 --restarts 3 --stages 2 --resume weights.bin
 cd ../..
 
 # benchmark
 build/play --weights runs/main/weights.bin --games 1000 --depth 1
 build/play --weights runs/main/weights.bin --games 100 --depth 3
 build/play --weights runs/main/weights.bin --games 10 --time 100   # 100 ms per move
+build/play --weights runs/main/weights.bin --games 40 --depth 3 --extra 1   # deeper when few cells are empty
 
 # package for the viewer, then serve viewer/ over HTTP
 tools/release.sh runs/main

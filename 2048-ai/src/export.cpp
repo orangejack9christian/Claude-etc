@@ -3,11 +3,13 @@
 //   ./export --weights weights.bin --prune 4 --out net.bin    (then gzip it)
 //
 // Layout (little-endian):
-//   "N2KW" u32 version=1  u32 np  u32 nc  u8 patterns[np][nc]  f32 winit  u64 games
-//   per pattern: u32 count, f32 scale
-//   per pattern: i16 value[count]      weight = winit + value * scale
-//   per pattern: LEB128 key deltas     sorted 24-bit table indices
-// Weights updated fewer than --prune times are dropped (read back as winit).
+//   "N2KW" u32 version=2  u32 np  u32 nc  u32 stages  u32 stage_tile
+//   u8 patterns[np][nc]  f32 winit  u64 games
+//   per table (stage-major, stages*np tables): u32 count, f32 scale
+//   per table: i16 value[count]      weight = winit + value * scale
+//   per table: LEB128 key deltas     sorted 24-bit table indices
+// Weights updated fewer than --prune times are dropped. A dropped main-stage weight
+// reads back as winit; a dropped endgame weight falls back to the main-stage weight.
 #include <cinttypes>
 
 #include "ntuple.h"
@@ -31,17 +33,18 @@ int main(int argc, char** argv) {
   Net net;
   net.load(weights, 1);
   FILE* f = fopen(out.c_str(), "wb");
-  uint32_t hdr[4] = {0x574B324E /* "N2KW" */, 1, Net::NP, Net::NC};
-  fwrite(hdr, 4, 4, f);
+  const int T = Net::NP * net.stages;  // tables
+  uint32_t hdr[6] = {0x574B324E /* "N2KW" */, 2, Net::NP, Net::NC, (uint32_t)net.stages, Net::STAGE_TILE};
+  fwrite(hdr, 4, 6, f);
   for (int p = 0; p < Net::NP; p++)
     for (int j = 0; j < Net::NC; j++) fputc(Net::PATTERNS[p][j], f);
   fwrite(&net.winit, 4, 1, f);
   fwrite(&net.games, 8, 1, f);
 
-  std::vector<std::vector<uint32_t>> keys(Net::NP);
-  std::vector<float> scale(Net::NP);
+  std::vector<std::vector<uint32_t>> keys(T);
+  std::vector<float> scale(T);
   size_t total = 0;
-  for (int p = 0; p < Net::NP; p++) {
+  for (int p = 0; p < T; p++) {
     const float* W = net.w.data() + (size_t)p * Net::PSIZE;
     const uint16_t* C = net.cnt.data() + (size_t)p * Net::PSIZE;
     float mx = 0;
@@ -58,14 +61,14 @@ int main(int argc, char** argv) {
     total += n;
     printf("pattern %d: %u weights, scale %.4f\n", p, n, scale[p]);
   }
-  for (int p = 0; p < Net::NP; p++) {
+  for (int p = 0; p < T; p++) {
     const float* W = net.w.data() + (size_t)p * Net::PSIZE;
     std::vector<int16_t> q;
     q.reserve(keys[p].size());
     for (uint32_t i : keys[p]) q.push_back((int16_t)std::lround((W[i] - net.winit) / scale[p]));
     fwrite(q.data(), 2, q.size(), f);
   }
-  for (int p = 0; p < Net::NP; p++) {
+  for (int p = 0; p < T; p++) {
     uint32_t prev = 0;
     std::vector<uint8_t> buf;
     for (uint32_t k : keys[p]) {
@@ -82,13 +85,15 @@ int main(int argc, char** argv) {
   long size = ftell(f);
   fclose(f);
   size_t touched = 0;
-  for (size_t i = 0; i < Net::SIZE; i++) touched += net.cnt[i] > 0;
+  for (size_t i = 0; i < net.cnt.size(); i++) touched += net.cnt[i] > 0;
   printf("wrote %s: %zu weights (of %zu ever updated), %.1f MB (trained %" PRIu64 " games)\n", out.c_str(), total,
          touched, size / 1e6, net.games);
   if (!meta.empty()) {
     FILE* m = fopen(meta.c_str(), "w");
-    fprintf(m, "{\"weights\":%zu,\"touched\":%zu,\"shipped\":%zu,\"games\":%" PRIu64 ",\"prune\":%d,\"patterns\":[",
-            Net::SIZE, touched, total, net.games, prune);
+    fprintf(m,
+            "{\"weights\":%zu,\"stages\":%d,\"touched\":%zu,\"shipped\":%zu,\"games\":%" PRIu64
+            ",\"prune\":%d,\"patterns\":[",
+            Net::SIZE * net.stages, net.stages, touched, total, net.games, prune);
     for (int p = 0; p < Net::NP; p++) {
       fprintf(m, "%s[", p ? "," : "");
       for (int j = 0; j < Net::NC; j++) fprintf(m, "%s%d", j ? "," : "", Net::PATTERNS[p][j]);

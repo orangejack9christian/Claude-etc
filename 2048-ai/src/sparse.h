@@ -12,7 +12,7 @@ namespace g2048 {
 struct SparseNet {
   static const int MAXP = 8;
   static const int NC = 6;
-  int np = 0, nf = 0;
+  int np = 0, nf = 0, nstages = 1, stage_tile = 14;
   uint8_t pat[MAXP][NC];
   float winit = 0;
   uint64_t games = 0;
@@ -34,10 +34,20 @@ struct SparseNet {
   // alloc(bytes) must return zeroed, 8-byte aligned memory. Returns false on a bad file.
   template <class Alloc>
   bool load(const uint8_t* d, uint32_t len, Alloc alloc) {
-    if (len < 16 || rd32(d) != 0x574B324E || rd32(d + 4) != 1) return false;
+    if (len < 24 || rd32(d) != 0x574B324E) return false;
+    uint32_t version = rd32(d + 4);
+    if (version != 1 && version != 2) return false;
     np = (int)rd32(d + 8);
-    if (np < 1 || np > MAXP || rd32(d + 12) != NC) return false;
+    if (rd32(d + 12) != NC) return false;
     const uint8_t* p = d + 16;
+    if (version == 2) {
+      nstages = (int)rd32(d + 16);
+      stage_tile = (int)rd32(d + 20);
+      p += 8;
+      if (nstages < 1 || nstages > 2 || stage_tile != 14) return false;
+    }
+    int ntab = np * nstages;
+    if (np < 1 || ntab > MAXP) return false;
     for (int i = 0; i < np; i++)
       for (int j = 0; j < NC; j++) pat[i][j] = *p++;
     winit = rdf(p);
@@ -46,17 +56,17 @@ struct SparseNet {
     p += 8;
     uint32_t cnt[MAXP];
     float scale[MAXP];
-    for (int i = 0; i < np; i++) {
+    for (int i = 0; i < ntab; i++) {
       cnt[i] = rd32(p);
       scale[i] = rdf(p + 4);
       p += 8;
       count += cnt[i];
     }
     const uint8_t* q = p;  // int16 values
-    for (int i = 0; i < np; i++) p += 2 * cnt[i];
+    for (int i = 0; i < ntab; i++) p += 2 * cnt[i];
     const uint8_t* end = d + len;
     if (p > end) return false;
-    for (int i = 0; i < np; i++) {
+    for (int i = 0; i < ntab; i++) {
       bits[i] = (uint64_t*)alloc(65536 * 4 * 8);
       wbase[i] = (uint32_t*)alloc(65536 * 4 * 4);
       vals[i] = (float*)alloc(cnt[i] * 4 + 4);
@@ -112,8 +122,30 @@ struct SparseNet {
     return vals[p][wbase[p][w] + __builtin_popcountll(word & (bit - 1))];
   }
 
+  // Endgame tables override the main ones where they have an entry.
+  inline float weight_late(int p, uint32_t idx) const {
+    int t = np + p;
+    uint32_t w = idx >> 6;
+    uint64_t word = bits[t][w];
+    uint64_t bit = 1ULL << (idx & 63);
+    if (!(word & bit)) return weight(p, idx);
+    return vals[t][wbase[t][w] + __builtin_popcountll(word & (bit - 1))];
+  }
+
+  static inline bool late(board_t b) { return (b & (b >> 1) & (b >> 2) & 0x2222222222222222ULL) != 0; }
+
   inline float value(board_t b) const {
     float v = 0;
+    if (nstages > 1 && late(b)) {
+      for (int f = 0; f < nf; f++) {
+        const uint8_t* s = shift[f];
+        uint32_t idx = (uint32_t)((b >> s[0]) & 0xF) | ((uint32_t)((b >> s[1]) & 0xF) << 4) |
+                       ((uint32_t)((b >> s[2]) & 0xF) << 8) | ((uint32_t)((b >> s[3]) & 0xF) << 12) |
+                       ((uint32_t)((b >> s[4]) & 0xF) << 16) | ((uint32_t)((b >> s[5]) & 0xF) << 20);
+        v += weight_late(fpat[f], idx);
+      }
+      return v;
+    }
     for (int f = 0; f < nf; f++) {
       const uint8_t* s = shift[f];
       uint32_t idx = (uint32_t)((b >> s[0]) & 0xF) | ((uint32_t)((b >> s[1]) & 0xF) << 4) |

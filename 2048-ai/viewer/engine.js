@@ -123,8 +123,12 @@
       let o = 0;
       const u32 = () => { const v = dv.getUint32(o, true); o += 4; return v; };
       if (u32() !== 0x574b324e) throw new Error('not a 2048 network file');
-      if (u32() !== 1) throw new Error('unsupported network version');
+      const version = u32();
+      if (version !== 1 && version !== 2) throw new Error('unsupported network version');
       const np = u32(), nc = u32();
+      this.nstages = version === 2 ? u32() : 1;
+      if (version === 2) u32();  // stage tile: 14 (a 16384 tile starts the endgame stage)
+      const nt = np * this.nstages;
       this.patterns = [];
       for (let p = 0; p < np; p++) {
         const cells = [];
@@ -134,10 +138,11 @@
       this.winit = dv.getFloat32(o, true); o += 4;
       this.games = Number(dv.getBigUint64(o, true)); o += 8;
       const counts = [], scales = [];
-      for (let p = 0; p < np; p++) { counts.push(u32()); scales.push(dv.getFloat32(o, true)); o += 4; }
+      for (let p = 0; p < nt; p++) { counts.push(u32()); scales.push(dv.getFloat32(o, true)); o += 4; }
       this.count = counts.reduce((a, b) => a + b, 0);
+      this.np = np;
       this.vals = [];
-      for (let p = 0; p < np; p++) {
+      for (let p = 0; p < nt; p++) {
         const q = new Int16Array(buf.slice(o, o + 2 * counts[p]));
         o += 2 * counts[p];
         const v = new Float32Array(counts[p]);
@@ -147,7 +152,7 @@
       const bytes = new Uint8Array(buf);
       this.lo = [];
       this.off = [];
-      for (let p = 0; p < np; p++) {
+      for (let p = 0; p < nt; p++) {
         const lo = new Uint8Array(counts[p]);
         const off = new Uint32Array(65537);
         let key = 0, prevBucket = 0;
@@ -178,24 +183,28 @@
       }
     }
 
-    weight(p, idx) {
-      const off = this.off[p], lo = this.lo[p];
+    // Table t's weight at idx; endgame tables (t >= np) fall back to the main table.
+    weight(t, idx) {
+      const off = this.off[t], lo = this.lo[t];
       const bucket = idx >>> 8, key = idx & 255;
       let a = off[bucket], z = off[bucket + 1] - 1;
       while (a <= z) {
         const m = (a + z) >> 1, v = lo[m];
-        if (v === key) return this.vals[p][m];
+        if (v === key) return this.vals[t][m];
         if (v < key) a = m + 1; else z = m - 1;
       }
-      return this.winit;
+      return t >= this.np ? this.weight(t - this.np, idx) : this.winit;
     }
 
     value(b) {
+      let late = false;
+      if (this.nstages > 1) for (let i = 0; i < 16; i++) if (b[i] >= 14) { late = true; break; }
+      const shift = late ? this.np : 0;
       let v = 0;
       for (const f of this.features) {
         const c = f.cells;
         const idx = b[c[0]] | (b[c[1]] << 4) | (b[c[2]] << 8) | (b[c[3]] << 12) | (b[c[4]] << 16) | (b[c[5]] << 20);
-        v += this.weight(f.p, idx);
+        v += this.weight(f.p + shift, idx);
       }
       return v;
     }

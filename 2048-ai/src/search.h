@@ -126,6 +126,14 @@ struct Expectimax {
     return res;
   }
 
+  // Fixed depth plus extra depth in critical positions (few empty cells), where the
+  // branching factor is small and a single wrong move can end the game.
+  SearchResult adaptive(board_t b, int depth, int extra) {
+    int empty = count_empty(b);
+    int d = depth + (empty <= 4 ? extra : 0) + (empty <= 2 ? extra : 0);
+    return fixed(b, d);
+  }
+
   // Fixed depth, for reproducible benchmarks.
   SearchResult fixed(board_t b, int depth) {
     SearchResult res;

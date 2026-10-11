@@ -174,6 +174,8 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .chart svg .cross { stroke: var(--ink-2); stroke-width: 1; }
 .chart svg .marker { stroke: var(--accent); stroke-width: 1.5; }
 .chart svg .endlbl { fill: var(--ink-2); font-size: 11px; }
+.chart svg .evt { stroke: var(--ink-2); stroke-width: 1; opacity: 0.45; }
+.chart svg .evtlbl { fill: var(--ink-2); font-size: 10px; }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12.5px; color: var(--ink-2); }
 .legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
 .tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: 12px var(--f-mono); color: var(--ink); box-shadow: 0 6px 18px rgba(0,0,0,0.12); white-space: nowrap; z-index: 2; }
@@ -770,6 +772,13 @@ footer { color: var(--muted); font-size: 13px; }
       el('text', { x: X(v), y: H - M.b + 17, 'text-anchor': 'middle' }).textContent = compact(v);
     }
     el('text', { x: W - M.r, y: H - 2, 'text-anchor': 'end' }).textContent = 'training games (log scale)';
+    // Training changes, as labelled hairlines.
+    (opts.events || []).forEach((ev, i) => {
+      if (ev.games < xs[0] || ev.games > xs[xs.length - 1]) return;
+      const ex = X(ev.games);
+      el('line', { x1: ex, x2: ex, y1: M.t, y2: H - M.b, class: 'evt' });
+      el('text', { x: ex - 4, y: M.t + 10 + i * 13, 'text-anchor': 'end', class: 'evtlbl' }).textContent = ev.label;
+    });
     const marker = el('line', { y1: M.t, y2: H - M.b, class: 'marker', visibility: 'hidden' });
     for (const s of opts.series) {
       const pts = xs.map((x, i) => `${X(x).toFixed(1)},${Y(s.y[i]).toFixed(1)}`);
@@ -828,14 +837,14 @@ footer { color: var(--muted); font-size: 13px; }
     const x = L.map((r) => r.games);
     const scoreMax = niceMax(Math.max(...L.map((r) => r.avg)) * 1.05);
     charts.push(lineChart($('c-score'), {
-      aria: 'Average score rising with training games', x, yMax: scoreMax,
+      aria: 'Average score rising with training games', x, yMax: scoreMax, events: DATA.events,
       yTicks: [0, 0.25, 0.5, 0.75, 1].map((f) => f * scoreMax), yFmt: compact, tipFmt: fmt, area: true,
       series: [{ name: 'Average score', color: 'var(--accent)', y: L.map((r) => r.avg), endLabel: compact(L[L.length - 1].avg) }],
     }));
     const T = [['2048', 'r2048', '--l2048'], ['4096', 'r4096', '--l4096'], ['8192', 'r8192', '--l8192'], ['16384', 'r16384', '--l16384'], ['32768', 'r32768', '--l32768']];
     const used = T.filter((t) => L.some((r) => r[t[1]] > 0));
     charts.push(lineChart($('c-tiles'), {
-      aria: 'Share of games reaching 2048 and larger tiles', x, yMax: 1,
+      aria: 'Share of games reaching 2048 and larger tiles', x, yMax: 1, events: DATA.events,
       yTicks: [0, 0.25, 0.5, 0.75, 1], yFmt: (v) => Math.round(v * 100) + '%', tipFmt: (v) => (v * 100).toFixed(1) + '%',
       series: used.map((t) => ({ name: t[0], color: `var(${t[2]})`, y: L.map((r) => r[t[1]]), endLabel: `${t[0]} ${Math.round(L[L.length - 1][t[1]] * 100)}%` })),
     }));
@@ -844,6 +853,7 @@ footer { color: var(--muted); font-size: 13px; }
   // ---- anatomy ----------------------------------------------------------
   function searchName(e) {
     if (e.time_ms > 0) return `${e.time_ms / 1000} s per move`;
+    if (e.extra) return `Depth ${e.depth}, up to ${e.depth + 2 * e.extra} when tight`;
     return e.depth === 1 ? 'Network only' : `Depth ${e.depth} search`;
   }
   function buildInside() {
@@ -857,12 +867,14 @@ footer { color: var(--muted); font-size: 13px; }
     });
     const facts = [
       ['Weights', `${fmt(m.weights)}`],
+      ['Networks', m.stages > 1 ? 'main + endgame (from the first 16384 tile)' : 'one'],
       ['Weights it ever adjusted', compact(m.touched)],
       ['Weights shipped to this page', compact(m.shipped)],
       ['Training games', fmt(m.games)],
       ['Training moves', compact(m.moves)],
       ['Training time', m.hours.toFixed(1) + ' h on 4 CPU cores'],
       ['Learning rule', 'TD(0) + temporal coherence'],
+      ['Endgame practice', DATA.events.length ? `from game ${compact(DATA.events[0].games)}: 3 of 4 games restart mid-game` : 'none'],
       ['Search speed in your browser', '<span id="f-nps">measuring…</span>'],
     ];
     $('facts').innerHTML = facts.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('');
