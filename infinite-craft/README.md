@@ -187,16 +187,14 @@ node test/run-sim.js --legacy Dragon   # the pre-2026 game client
 The simulator imitates the current client: `window.IC` plus `.container`'s
 `craft(instanceA, instanceB)`, which throws unless it's given real board instances.
 
-Latest results (v6.1.0, no random combining):
+Latest results (v6.5.0):
 
 | Run | Result |
 |---|---|
-| Scenario words (lineages, stale recipes, gibberish, phrases, digits, `Wow!`, `Xx_Gamer_xX`, exact-case `qUiRkY`) | 25/25, avg 36 crafts |
-| 100 random words, 12% tool noise | 100/100, avg 16–17 crafts per word (max 70) |
-| 100 random words, 30% tool noise | 100/100, avg 26–29 crafts per word (max 240) |
-| Words with a letter no tool can add (`naïve`, `Über`) | stop in seconds with the reason, 0 crafts |
-| UI checks (v5 migration, pause/skip/stop, export/import, Pokedex, explore button, drag) | 29/29 |
-| Keyboard checks (typing stays in the panel; outside it still goes to game search) | 11/11 |
+| Scenario words: lineages, stale recipes, gibberish, phrases, digits, `Wow!`, `Xx_Gamer_xX`, exact-case `qUiRkY`, names with no space tool, a spot where every letter tool fails (`"mr. Erem"` + e), older client | 33/33, avg 97 crafts |
+| 50 random words, 12% tool noise | 50/50, avg 37 crafts per word (max 241) |
+| 50 random words, 30% tool noise | 50/50, avg 59 crafts per word (max 286) |
+| UI, keyboard and connection checks | all pass |
 
 These are simulator results. The real game's AI and Infinibrowser's data will behave
 differently, so expect different craft counts.
