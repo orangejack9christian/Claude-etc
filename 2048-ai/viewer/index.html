@@ -1,0 +1,961 @@
+<title>2048 Network</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;800;900&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: an instrument console. The board is the hero on the left, the engine's live
+   readouts stack on the right, and the training record and network anatomy follow below. */
+:root {
+  --bg: #eef1f4;
+  --panel: #ffffff;
+  --ink: #14171c;
+  --ink-2: #4a5360;
+  --muted: #6b7480;
+  --line: #dce1e7;
+  --accent: #4b3bc4;
+  --accent-ink: #ffffff;
+  --accent-soft: #e6e3fb;
+  --board: #2a2f38;
+  --cell: #3a414c;
+  --overlay: rgba(20, 23, 28, 0.78);
+  --l2048: #eb6834; --l4096: #c4307a; --l8192: #6250d6; --l16384: #1baf7a; --l32768: #2a78d6;
+  --f-display: "Big Shoulders Display", "Arial Narrow", "Roboto Condensed", Impact, sans-serif;
+  --f-body: "Instrument Sans", "Helvetica Neue", Arial, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --r: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1115; --panel: #171b21; --ink: #e8ecf1; --ink-2: #b4bcc7; --muted: #8b95a1; --line: #29303a;
+    --accent: #9a8cf0; --accent-ink: #12101f; --accent-soft: #2a2550;
+    --board: #232831; --cell: #313843; --overlay: rgba(10, 12, 15, 0.82);
+    --l2048: #e0632a; --l4096: #d0438e; --l8192: #9085e9; --l16384: #199e70; --l32768: #3987e5;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1115; --panel: #171b21; --ink: #e8ecf1; --ink-2: #b4bcc7; --muted: #8b95a1; --line: #29303a;
+  --accent: #9a8cf0; --accent-ink: #12101f; --accent-soft: #2a2550;
+  --board: #232831; --cell: #313843; --overlay: rgba(10, 12, 15, 0.82);
+  --l2048: #e0632a; --l4096: #d0438e; --l8192: #9085e9; --l16384: #199e70; --l32768: #3987e5;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { background: var(--bg); color: var(--ink); }
+body { font-family: var(--f-body); font-size: 15px; line-height: 1.5; }
+.wrap { max-width: 1120px; margin: 0 auto; padding-inline: 20px; padding-block: 28px 64px; display: grid; gap: 44px; }
+h1, h2, h3 { margin: 0; text-wrap: balance; }
+p { margin: 0; }
+.mono { font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+.label { font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+
+/* ---- header ---- */
+.top { display: grid; gap: 10px; max-width: 70ch; }
+.top h1 { font-family: var(--f-display); font-weight: 900; font-size: clamp(44px, 7vw, 72px); line-height: 0.9; letter-spacing: 0.005em; text-transform: uppercase; }
+.top h1 span { color: var(--accent); }
+.top p { color: var(--ink-2); font-size: 16px; }
+
+/* ---- stage ---- */
+.stage { display: grid; grid-template-columns: minmax(0, 520px) minmax(0, 1fr); gap: 28px; align-items: start; }
+@media (max-width: 860px) { .stage { grid-template-columns: minmax(0, 1fr); } }
+.board-col { display: grid; gap: 14px; min-width: 0; }
+
+.scorebar { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.stat { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 8px 12px 9px; min-width: 0; }
+.stat .v { font-family: var(--f-display); font-weight: 800; font-size: 30px; line-height: 1.05; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.mode-line { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between; min-height: 28px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; font-family: var(--f-mono); font-size: 12px; padding: 4px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--ink); max-width: 100%; }
+.chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
+.chip.live .dot { animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: 0.25; } }
+.linkbtn { background: none; border: 0; padding: 4px 0; font: inherit; font-size: 13px; color: var(--accent); cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+
+.board { position: relative; width: 100%; aspect-ratio: 1; max-width: 100%; background: var(--board); border-radius: 14px; container-type: inline-size; --gap: 2.6cqw; padding: var(--gap); touch-action: manipulation; }
+.grid, .tiles { position: absolute; inset: var(--gap); }
+.grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--gap); }
+.grid div { background: var(--cell); border-radius: 1.6cqw; }
+.tile { position: absolute; left: 0; top: 0; width: calc((100% - 3 * var(--gap)) / 4); height: calc((100% - 3 * var(--gap)) / 4);
+  transform: translate(calc(var(--c) * (100% + var(--gap))), calc(var(--r) * (100% + var(--gap))));
+  transition: transform var(--dur, 100ms) ease-out; will-change: transform; }
+.tile .face { width: 100%; height: 100%; border-radius: 1.6cqw; display: grid; place-items: center; font-family: var(--f-display); font-weight: 900; line-height: 1; letter-spacing: -0.01em; background: var(--tc); color: var(--tt); font-size: var(--fs); }
+.tile.appear .face { animation: appear var(--dur, 100ms) ease-out backwards; }
+.tile.pop .face { animation: pop calc(var(--dur, 100ms) * 1.4) ease-out; }
+.board.instant .tile { transition: none; }
+.board.instant .tile .face { animation: none; }
+@keyframes appear { from { transform: scale(0.2); opacity: 0; } }
+@keyframes pop { 40% { transform: scale(1.12); } }
+.overlay { position: absolute; inset: 0; border-radius: 14px; background: var(--overlay); color: #fff; display: grid; place-content: center; text-align: center; gap: 6px; padding: 20px; }
+.overlay .big { font-family: var(--f-display); font-weight: 900; font-size: clamp(34px, 9cqw, 56px); line-height: 1; text-transform: uppercase; }
+.overlay .small { font-family: var(--f-mono); font-size: 13px; opacity: 0.85; }
+.overlay .bar { height: 3px; width: 160px; margin: 8px auto 0; background: rgba(255,255,255,0.2); border-radius: 2px; overflow: hidden; }
+.overlay .bar i { display: block; height: 100%; width: 0; background: #fff; }
+
+.controls { display: grid; gap: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 14px; }
+.btnrow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+button.btn { font: 600 14px var(--f-body); padding: 9px 16px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; display: inline-flex; align-items: center; gap: 8px; }
+button.btn:hover { border-color: var(--accent); }
+button.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); min-width: 104px; justify-content: center; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button:disabled { opacity: 0.45; cursor: default; }
+.ctl { display: grid; grid-template-columns: 96px minmax(0, 1fr) auto; gap: 12px; align-items: center; }
+.ctl output { font-family: var(--f-mono); font-size: 13px; min-width: 76px; text-align: right; }
+.ctl.stack { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+input[type=range] { width: 100%; accent-color: var(--accent); }
+.seg { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { font: 500 13px var(--f-body); padding: 8px 4px; border: 0; background: transparent; color: var(--ink-2); cursor: pointer; white-space: nowrap; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+.hint { font-size: 12.5px; color: var(--muted); }
+.kbd { font-family: var(--f-mono); font-size: 11px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; }
+
+/* ---- readouts ---- */
+.readout { display: grid; gap: 16px; min-width: 0; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 16px; display: grid; gap: 12px; min-width: 0; }
+.panel h3 { font-family: var(--f-display); font-weight: 800; font-size: 22px; letter-spacing: 0.01em; text-transform: uppercase; line-height: 1; }
+.panel .head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+
+.eng-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.eng-stats .v { font-family: var(--f-display); font-weight: 800; font-size: 28px; line-height: 1.05; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.eng-stats .v small { font-family: var(--f-mono); font-size: 12px; font-weight: 400; color: var(--muted); margin-left: 3px; }
+.depthbar { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 2px; margin-top: 6px; }
+.depthbar i { height: 4px; border-radius: 1px; background: var(--line); }
+.depthbar i.on { background: var(--accent); }
+.moves { display: grid; gap: 7px; }
+.mv { display: grid; grid-template-columns: 22px 52px minmax(0, 1fr) 96px; gap: 10px; align-items: center; font-size: 14px; }
+.mv .arrow { font-size: 18px; text-align: center; color: var(--muted); }
+.mv .name { color: var(--ink-2); }
+.mv .track { height: 10px; background: var(--bg); border-radius: 5px; overflow: hidden; }
+.mv .fill { display: block; height: 100%; width: 0; background: var(--muted); opacity: 0.45; border-radius: 0 5px 5px 0; transition: width 120ms ease-out; }
+.mv .num { font-family: var(--f-mono); font-size: 12.5px; text-align: right; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.mv.best .arrow, .mv.best .name { color: var(--accent); font-weight: 600; }
+.mv.best .fill { background: var(--accent); opacity: 1; }
+.mv.best .num { color: var(--ink); }
+.mv.blocked .name, .mv.blocked .num, .mv.blocked .arrow { opacity: 0.45; }
+.mv.taken .name::after { content: " · taken"; font-size: 11px; color: var(--muted); }
+.projection { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; border-top: 1px solid var(--line); padding-top: 12px; flex-wrap: wrap; }
+.projection .v { font-family: var(--f-display); font-weight: 800; font-size: 28px; line-height: 1; font-variant-numeric: tabular-nums; }
+
+.tally-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.tally-grid .v { font-family: var(--f-display); font-weight: 800; font-size: 24px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; min-height: 30px; }
+.mini { width: 30px; height: 30px; border-radius: 5px; display: grid; place-items: center; font: 800 10px var(--f-display); background: var(--tc); color: var(--tt); }
+.empty-note { font-size: 13px; color: var(--muted); }
+
+.loadbar { height: 4px; background: var(--bg); border-radius: 2px; overflow: hidden; }
+.loadbar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width 200ms; }
+
+/* ---- sections ---- */
+.section { display: grid; gap: 18px; }
+.section > header { display: grid; gap: 10px; max-width: 72ch; }
+.section h2 { font-family: var(--f-display); font-weight: 900; font-size: clamp(30px, 4.4vw, 42px); line-height: 0.95; text-transform: uppercase; }
+.section > header p { color: var(--ink-2); }
+
+.replays { display: flex; flex-wrap: wrap; gap: 8px; }
+.rp { display: grid; gap: 2px; text-align: left; padding: 9px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; font: inherit; min-width: 112px; }
+.rp:hover { border-color: var(--accent); }
+.rp[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.rp b { font: 600 13.5px var(--f-body); }
+.rp span { font: 12px var(--f-mono); color: var(--muted); }
+.rp .sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; background: var(--tc); margin-right: 5px; vertical-align: 0; }
+
+.charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+@media (max-width: 860px) { .charts { grid-template-columns: minmax(0, 1fr); } }
+.chart { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 16px 16px 10px; display: grid; gap: 8px; min-width: 0; position: relative; }
+.chart h3 { font: 600 15px var(--f-body); }
+.chart .sub { font-size: 12.5px; color: var(--muted); }
+.chart svg { width: 100%; height: auto; display: block; overflow: visible; }
+.chart svg text { font-family: var(--f-mono); font-size: 10.5px; fill: var(--muted); }
+.chart svg .gl { stroke: var(--line); stroke-width: 1; }
+.chart svg .ax { stroke: var(--line); stroke-width: 1; }
+.chart svg .ln { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart svg .area { stroke: none; opacity: 0.1; }
+.chart svg .cross { stroke: var(--ink-2); stroke-width: 1; }
+.chart svg .marker { stroke: var(--accent); stroke-width: 1.5; }
+.chart svg .endlbl { fill: var(--ink-2); font-size: 11px; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12.5px; color: var(--ink-2); }
+.legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+.tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: 12px var(--f-mono); color: var(--ink); box-shadow: 0 6px 18px rgba(0,0,0,0.12); white-space: nowrap; z-index: 2; }
+.tip .row { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+.tip i { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+
+.inside { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 860px) { .inside { grid-template-columns: minmax(0, 1fr); } }
+.patterns { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.pat { display: grid; gap: 6px; }
+.pat .g { display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px; aspect-ratio: 1; max-width: 100%; padding: 4px; background: var(--board); border-radius: 6px; }
+.pat .g div { background: var(--cell); border-radius: 2px; }
+.pat .g div.on { background: var(--accent); }
+.facts { display: grid; gap: 10px; margin: 0; }
+.facts div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+.facts dt { color: var(--ink-2); }
+.facts dd { margin: 0; font-family: var(--f-mono); font-variant-numeric: tabular-nums; text-align: right; }
+.prose { display: grid; gap: 10px; color: var(--ink-2); max-width: 66ch; }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+th, td { padding: 8px 10px; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+th { font: 500 11px var(--f-mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+td { font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+td.hl { color: var(--ink); font-weight: 500; }
+footer { color: var(--muted); font-size: 13px; }
+
+@media (max-width: 520px) {
+  .wrap { padding-inline: 16px; }
+  .stat .v { font-size: 24px; }
+  .eng-stats .v { font-size: 23px; }
+  .ctl { grid-template-columns: 74px minmax(0, 1fr) auto; }
+  .ctl.stack { grid-template-columns: minmax(0, 1fr); }
+  .mv { grid-template-columns: 18px 46px minmax(0, 1fr) 88px; gap: 8px; }
+  .patterns { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .seg button { font-size: 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tile { transition: none !important; }
+  .tile .face { animation: none !important; }
+  .chip.live .dot { animation: none; }
+}
+</style>
+
+<main class="wrap">
+  <header class="top">
+    <h1>2048 <span>Network</span></h1>
+    <p id="intro">A neural network that taught itself 2048, paired with a search engine that looks many moves ahead, the way a chess engine does. Both run right here in your browser.</p>
+  </header>
+
+  <section class="stage" aria-label="Live game">
+    <div class="board-col">
+      <div class="scorebar">
+        <div class="stat"><div class="label">Score</div><div class="v" id="s-score">0</div></div>
+        <div class="stat"><div class="label">Best tile</div><div class="v" id="s-best">–</div></div>
+        <div class="stat"><div class="label">Moves</div><div class="v" id="s-moves">0</div></div>
+      </div>
+      <div class="mode-line">
+        <span class="chip live" id="mode-chip"><span class="dot"></span><span id="mode-text">Loading…</span></span>
+        <button class="linkbtn" id="back-live" hidden>Back to live play</button>
+      </div>
+      <div class="board" id="board">
+        <div class="grid" aria-hidden="true"></div>
+        <div class="tiles" id="tiles"></div>
+        <div class="overlay" id="overlay" hidden></div>
+      </div>
+      <div class="controls">
+        <div class="btnrow">
+          <button class="btn primary" id="b-play">Pause</button>
+          <button class="btn" id="b-step">Step</button>
+          <button class="btn" id="b-new">New game</button>
+        </div>
+        <div class="ctl stack">
+          <span class="label" id="think-label-c">Thinking time per move</span>
+          <div class="seg" role="group" aria-labelledby="think-label-c" id="think">
+            <button data-ms="0" aria-pressed="false">Instant</button>
+            <button data-ms="20" aria-pressed="false">0.02 s</button>
+            <button data-ms="100" aria-pressed="true">0.1 s</button>
+            <button data-ms="500" aria-pressed="false">0.5 s</button>
+            <button data-ms="2000" aria-pressed="false">2 s</button>
+          </div>
+        </div>
+        <div class="ctl">
+          <label class="label" for="speed">Top speed</label>
+          <input type="range" id="speed" min="0" max="8" step="1" value="5">
+          <output id="speed-out" for="speed">30 moves/s</output>
+        </div>
+        <p class="hint">Instant is the network alone. With more time, the engine searches deeper: every move, every square the next tile could land on, every reply, until time runs out. <span class="kbd">Space</span> pause · <span class="kbd">→</span> step · <span class="kbd">N</span> new game</p>
+      </div>
+    </div>
+
+    <aside class="readout">
+      <div class="panel">
+        <div class="head"><h3>Engine</h3><span class="label" id="think-label">Last search</span></div>
+        <div class="eng-stats">
+          <div><div class="label">Depth</div><div class="v" id="e-depth">–</div><div class="depthbar" id="e-depthbar" aria-hidden="true"></div></div>
+          <div><div class="label">Positions</div><div class="v" id="e-nodes">–</div></div>
+          <div><div class="label">Speed</div><div class="v" id="e-nps">–</div></div>
+        </div>
+        <div class="moves" id="moves"></div>
+        <div class="projection">
+          <div><div class="label">Projected final score</div><div class="hint">Score so far plus the points the engine expects to earn from here.</div></div>
+          <div class="v" id="proj">–</div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="head"><h3>Games you've watched</h3><span class="label" id="tally-count">0 games</span></div>
+        <div class="tally-grid">
+          <div><div class="label">Best score</div><div class="v" id="t-best">–</div></div>
+          <div><div class="label">Average</div><div class="v" id="t-avg">–</div></div>
+          <div><div class="label">Reached 16384</div><div class="v" id="t-16k">–</div></div>
+        </div>
+        <div class="chips" id="t-chips"><span class="empty-note">Each finished live game adds its biggest tile here.</span></div>
+      </div>
+      <div class="panel" id="load-panel">
+        <div class="head"><h3>Network</h3><span class="label" id="load-label">Downloading weights</span></div>
+        <div class="loadbar"><i id="load-bar"></i></div>
+        <p class="hint" id="load-note">While the weights download, the board replays games from training.</p>
+      </div>
+    </aside>
+  </section>
+
+  <section class="section" id="learn">
+    <header>
+      <h2>How it learned</h2>
+      <p>The network started knowing nothing: every weight was zero. It played game after game, and after each one it nudged its weights so its prediction for every position moved toward what actually happened next (temporal-difference learning). Each button below replays a real game it played at that stage of training, with no search, just the network. Replays roll on to the next stage by themselves.</p>
+      <div class="btnrow"><button class="btn primary" id="b-learn">Watch it learn from zero</button><span class="hint" id="learn-status"></span></div>
+    </header>
+    <div class="replays" id="replays"></div>
+    <div class="charts">
+      <div class="chart" id="c-score">
+        <h3>Average score</h3>
+        <div class="sub">Per block of training games, network alone, no search</div>
+      </div>
+      <div class="chart" id="c-tiles">
+        <h3>Share of games reaching each tile</h3>
+        <div class="sub">Same games as the score chart</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="inside">
+    <header>
+      <h2>Inside the engine</h2>
+      <p>Like a modern chess engine, it has two halves: a learned evaluation that judges a position at a glance, and a search that looks ahead to check that judgement. The evaluation is an n-tuple network, the kind of network behind the strongest 2048 programs: shallow and very wide, with a learned weight for every arrangement of tiles in each of four 6-cell windows.</p>
+    </header>
+    <div class="inside">
+      <div class="panel">
+        <div class="head"><h3>The network's four windows</h3><span class="label">× 8 symmetries</span></div>
+        <div class="patterns" id="patterns"></div>
+        <div class="prose">
+          <p>Each window is also applied in all 8 rotations and reflections of the board, with shared weights, so the network sees 32 overlapping views. The value of a position is the sum of the 32 weights those views point to: the points it expects to still earn from there.</p>
+          <p>The search is expectimax. For each move it averages over every square the next tile could land on (a 2 nine times in ten, a 4 otherwise), takes its best reply to each, and so on. Like a chess engine it deepens one level at a time until its time is up, remembers positions it has already worked out, and skips branches too unlikely to matter.</p>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="head"><h3>Vital statistics</h3></div>
+        <dl class="facts" id="facts"></dl>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="head"><h3>Tested strength</h3><span class="label">Fresh games, not seen in training</span></div>
+      <div class="tablewrap"><table id="eval"></table></div>
+      <p class="hint" id="eval-note">Measured with the same network and search code compiled natively, on fresh random games.</p>
+    </div>
+  </section>
+
+  <footer>Trained from scratch on 4 CPU cores. Source and training code live in the <span class="mono">2048-ai</span> folder of the repository.</footer>
+</main>
+
+<script src="engine.js"></script>
+<script>
+(function () {
+  'use strict';
+  const G = window.G2048;
+  const $ = (id) => document.getElementById(id);
+  const fmt = (n) => Math.round(n).toLocaleString('en-US');
+  const compact = (n) => n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1).replace(/\.0$/, '') + 'M' : n >= 1e3 ? (n / 1e3).toFixed(n >= 1e4 ? 0 : 1).replace(/\.0$/, '') + 'K' : String(Math.round(n));
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // Tile colors: pale and cool for small tiles, warm through the middle, saturated past 2048.
+  const TILE = [
+    null,
+    ['#eef0f2', '#2b2f36'], ['#dfe5ea', '#2b2f36'], ['#c6dbe3', '#1f2a33'], ['#a6ced6', '#1b2a30'],
+    ['#88c2bb', '#16292a'], ['#a3cf8c', '#1d2a17'], ['#d2d672', '#2a2a10'], ['#f0d457', '#2e2606'],
+    ['#f2b843', '#2e1f04'], ['#f09a3a', '#2c1703'], ['#eb6834', '#ffffff'], ['#c4307a', '#ffffff'],
+    ['#6250d6', '#ffffff'], ['#1baf7a', '#0b231a'], ['#2a78d6', '#ffffff'],
+  ];
+  const tileStyle = (el, e) => { el.style.setProperty('--tc', TILE[e][0]); el.style.setProperty('--tt', TILE[e][1]); };
+  const fontFor = (e) => { const d = String(2 ** e).length; return d <= 2 ? '12cqw' : d === 3 ? '10.5cqw' : d === 4 ? '8.6cqw' : '7cqw'; };
+
+  let DATA = null;
+
+  // ---- search engine (Web Worker running WebAssembly) ---------------------
+  const engine = {
+    worker: null, ready: false, kind: '', nextId: 1, waiting: new Map(),
+    start(wasm, net) {
+      return new Promise((resolve, reject) => {
+        this.worker = new Worker('worker.js');
+        this.worker.onmessage = (e) => {
+          const m = e.data;
+          if (m.type === 'ready') { this.ready = true; this.kind = m.engine; this.games = m.games; this.count = m.count; resolve(m); }
+          else if (m.type === 'result' || m.type === 'error') {
+            const w = this.waiting.get(m.id);
+            this.waiting.delete(m.id);
+            if (w) (m.type === 'result' ? w.resolve(m) : w.reject(new Error(m.message)));
+          }
+        };
+        this.worker.onerror = (e) => reject(new Error(e.message || 'the search worker failed to start'));
+        this.worker.postMessage({ type: 'init', wasm, net }, [wasm, net]);
+      });
+    },
+    think(board, opts) {
+      const id = this.nextId++;
+      return new Promise((resolve, reject) => {
+        this.waiting.set(id, { resolve, reject });
+        this.worker.postMessage({ type: 'think', id, board: Array.from(board), budget: opts.budget || 0, depth: opts.depth || 0, maxDepth: 30 });
+      });
+    },
+  };
+
+  // ---- board rendering --------------------------------------------------
+  const boardEl = $('board'), tilesEl = $('tiles'), overlayEl = $('overlay');
+  for (let i = 0; i < 16; i++) boardEl.querySelector('.grid').appendChild(document.createElement('div'));
+  let tileEls = new Array(16).fill(null);
+  let pending = null;
+
+  function makeTile(cell, e, cls) {
+    const t = document.createElement('div');
+    t.className = 'tile' + (cls ? ' ' + cls : '');
+    t.style.setProperty('--r', cell >> 2);
+    t.style.setProperty('--c', cell & 3);
+    const f = document.createElement('div');
+    f.className = 'face';
+    f.textContent = 2 ** e;
+    f.style.setProperty('--fs', fontFor(e));
+    tileStyle(f, e);
+    t.appendChild(f);
+    tilesEl.appendChild(t);
+    return t;
+  }
+  function flush() { if (pending) { clearTimeout(pending.timer); pending.fn(); pending = null; } }
+  function renderStatic(b) {
+    flush();
+    tilesEl.textContent = '';
+    tileEls = new Array(16).fill(null);
+    for (let i = 0; i < 16; i++) if (b[i]) tileEls[i] = makeTile(i, b[i]);
+  }
+  function renderMove(m, spawn, dur) {
+    flush();
+    if (dur <= 0) { boardEl.classList.add('instant'); renderStatic(state.board); return; }
+    boardEl.classList.remove('instant');
+    boardEl.style.setProperty('--dur', dur + 'ms');
+    const mergeCells = new Set(m.merges.map((x) => x.cell));
+    const next = new Array(16).fill(null);
+    const doomed = [];
+    for (const s of m.slides) {
+      const el = tileEls[s.from];
+      if (!el) continue;
+      el.style.setProperty('--r', s.to >> 2);
+      el.style.setProperty('--c', s.to & 3);
+      if (mergeCells.has(s.to)) doomed.push(el); else next[s.to] = el;
+    }
+    tileEls = next;
+    const fn = () => {
+      for (const el of doomed) el.remove();
+      for (const mg of m.merges) tileEls[mg.cell] = makeTile(mg.cell, mg.exp, 'pop');
+      if (spawn) tileEls[spawn.cell] = makeTile(spawn.cell, spawn.exp, 'appear');
+    };
+    pending = { fn, timer: setTimeout(() => { pending = null; fn(); }, dur) };
+  }
+
+  // ---- engine readout ---------------------------------------------------
+  const ARROWS = ['↑', '→', '↓', '←'];
+  const movesEl = $('moves');
+  const mvRows = G.DIR_NAMES.map((name, d) => {
+    const row = document.createElement('div');
+    row.className = 'mv';
+    row.innerHTML = `<span class="arrow" aria-hidden="true">${ARROWS[d]}</span><span class="name">${name}</span><span class="track"><span class="fill"></span></span><span class="num">–</span>`;
+    movesEl.appendChild(row);
+    return { row, fill: row.querySelector('.fill'), num: row.querySelector('.num') };
+  });
+  const depthbar = $('e-depthbar');
+  for (let i = 0; i < 12; i++) depthbar.appendChild(document.createElement('i'));
+  function showSearch(r, taken) {
+    const values = r.values;
+    let hi = -Infinity;
+    for (const v of values) if (!Number.isNaN(v)) hi = Math.max(hi, v);
+    values.forEach((v, d) => {
+      const row = mvRows[d];
+      const blocked = Number.isNaN(v);
+      row.row.classList.toggle('blocked', blocked);
+      row.row.classList.toggle('best', d === r.dir);
+      row.row.classList.toggle('taken', taken != null && d === taken && d !== r.dir);
+      row.fill.style.width = blocked || hi <= 0 ? '0%' : Math.max(2, (100 * Math.max(0, v)) / hi).toFixed(1) + '%';
+      row.num.textContent = blocked ? 'blocked' : d === r.dir ? fmt(v) : '−' + fmt(hi - v);
+    });
+    $('e-depth').textContent = r.depth;
+    depthbar.querySelectorAll('i').forEach((el, i) => el.classList.toggle('on', i < r.depth));
+    $('e-nodes').textContent = r.nodes ? compact(r.nodes) : '–';
+    $('e-nps').innerHTML = r.nodes && r.ms > 1 ? `${compact((r.nodes / r.ms) * 1000)}<small>/s</small>` : '–';
+    $('proj').textContent = hi > -Infinity ? fmt(state.score + hi) : fmt(state.score);
+  }
+  function clearSearch(msg) {
+    mvRows.forEach((r) => { r.row.className = 'mv'; r.fill.style.width = '0%'; r.num.textContent = '–'; });
+    $('proj').textContent = msg || '–';
+  }
+
+  // ---- game state -------------------------------------------------------
+  const SPEEDS = [1, 2, 4, 8, 15, 30, 60, 120, Infinity];
+  const state = {
+    mode: 'replay', board: new Uint8Array(16), score: 0, moves: 0, over: false,
+    playing: true, speed: 5, budget: 100, replay: null, replayKey: null, gen: 0, busy: false, restartTimer: null,
+  };
+  const tally = [];
+
+  function updateStats() {
+    $('s-score').textContent = fmt(state.score);
+    const mt = G.maxTile(state.board);
+    $('s-best').textContent = mt ? fmt(2 ** mt) : '–';
+    $('s-moves').textContent = fmt(state.moves);
+  }
+  function setMode(text, live) {
+    $('mode-text').textContent = text;
+    $('mode-chip').classList.toggle('live', !!live);
+    $('back-live').hidden = state.mode === 'live' || !engine.ready;
+  }
+  function hideOverlay() { overlayEl.hidden = true; overlayEl.textContent = ''; }
+  function budgetLabel() { return state.budget ? `${state.budget / 1000} s per move` : 'network only'; }
+
+  function resetBoard() {
+    state.gen++;
+    clearTimeout(state.restartTimer);
+    hideOverlay();
+    state.score = 0; state.moves = 0; state.over = false;
+  }
+
+  function newLiveGame() {
+    if (!engine.ready) return;
+    resetBoard();
+    state.mode = 'live';
+    state.replay = null; state.replayKey = null;
+    markReplayButtons();
+    $('learn-status').textContent = '';
+    state.board = new Uint8Array(16);
+    G.addRandomTile(state.board, Math.random);
+    G.addRandomTile(state.board, Math.random);
+    renderStatic(state.board);
+    updateStats();
+    clearSearch();
+    $('think-label').textContent = 'Last search';
+    setMode(`Live · ${budgetLabel()}`, true);
+    run();
+  }
+
+  function startReplay(key, rec, label) {
+    resetBoard();
+    const g = G.decodeGame(rec);
+    state.mode = 'replay';
+    state.replay = { steps: g.steps, idx: 0, label, rec };
+    state.replayKey = key;
+    markReplayButtons();
+    state.board = g.init.slice();
+    renderStatic(state.board);
+    updateStats();
+    clearSearch();
+    $('think-label').textContent = engine.ready ? 'Trained network, no search' : 'Last search';
+    setMode(`Replay · ${label}`, false);
+    run();
+  }
+
+  function animDuration() {
+    const sp = SPEEDS[state.speed];
+    if (!isFinite(sp) || sp > 40) return 0;
+    return Math.min(110, Math.round(700 / sp));
+  }
+
+  // One move. Resolves to true if the game goes on.
+  async function step(animate) {
+    if (state.over) return false;
+    const gen = state.gen;
+    let dir, spawn = null;
+    if (state.mode === 'live') {
+      const r = await engine.think(state.board, { budget: state.budget });
+      if (gen !== state.gen) return false;
+      showSearch(r);
+      if (r.dir < 0) { endGame(); return false; }
+      dir = r.dir;
+    } else {
+      const s = state.replay.steps[state.replay.idx];
+      if (!s) { endGame(); return false; }
+      if (engine.ready && (animate || state.replay.idx % 8 === 0)) {
+        const before = state.board.slice();
+        engine.think(before, { depth: 1 }).then((r) => { if (gen === state.gen) showSearch(r, s.dir); }).catch(() => {});
+      }
+      state.replay.idx++;
+      dir = s.dir; spawn = { cell: s.cell, exp: s.exp };
+    }
+    const m = animate ? G.moveWithPaths(state.board, dir) : G.move(state.board, dir);
+    if (!m) { endGame(); return false; }
+    state.board = m.board;
+    state.score += m.reward;
+    state.moves++;
+    if (state.mode === 'live') spawn = G.addRandomTile(state.board, Math.random);
+    else state.board[spawn.cell] = spawn.exp;
+    if (animate) { renderMove(m, spawn, animDuration()); updateStats(); }
+    const finished = state.mode === 'live' ? !G.canMove(state.board) : state.replay.idx >= state.replay.steps.length;
+    if (finished) { endGame(); return false; }
+    return true;
+  }
+
+  // The play loop. Each call owns the board until the generation changes.
+  async function run() {
+    const gen = state.gen;
+    if (state.busy) return;  // the running loop notices the new generation and restarts us
+    state.busy = true;
+    try {
+      let lastPaint = 0;
+      while (state.playing && !state.over && gen === state.gen) {
+        if (state.mode === 'live' && !engine.ready) break;
+        const t0 = performance.now();
+        const sp = SPEEDS[state.speed];
+        const turbo = !isFinite(sp) || sp > 40;
+        const alive = await step(!turbo);
+        if (gen !== state.gen || !alive) break;
+        if (turbo) {
+          if (performance.now() - lastPaint > 33) {
+            renderStatic(state.board); updateStats(); lastPaint = performance.now();
+            await sleep(0);
+          }
+        } else {
+          const wait = 1000 / sp - (performance.now() - t0);
+          if (wait > 0) await sleep(wait);
+        }
+      }
+    } catch (e) {
+      setMode('Engine error: ' + e.message, false);
+    } finally {
+      state.busy = false;
+    }
+    if (gen !== state.gen && state.playing && !state.over) run();
+    else if (!state.over) { renderStatic(state.board); updateStats(); }
+  }
+
+  function endGame() {
+    if (state.over) return;
+    state.over = true;
+    renderStatic(state.board);
+    updateStats();
+    const mt = G.maxTile(state.board);
+    if (state.mode === 'live') {
+      tally.push({ score: state.score, max: mt });
+      renderTally();
+    }
+    overlayEl.hidden = false;
+    const nextStage = state.mode === 'replay' ? nextStageAfter(state.replayKey) : null;
+    const auto = state.playing && (state.mode === 'live' || nextStage || engine.ready);
+    const nextText = state.mode === 'live' ? 'Next game in 4 s' : nextStage ? `Next: ${nextStage.title.toLowerCase()} in 4 s` : 'Live play in 4 s';
+    overlayEl.innerHTML = `<div class="small">${state.mode === 'live' ? 'Game over' : 'End of replay · ' + state.replay.label}</div>
+      <div class="big">${fmt(2 ** mt)} tile</div>
+      <div class="small">Score ${fmt(state.score)} · ${fmt(state.moves)} moves</div>
+      ${auto ? `<div class="small">${nextText}</div><div class="bar"><i></i></div>` : ''}`;
+    if (auto) {
+      overlayEl.querySelector('.bar i').animate([{ width: '0%' }, { width: '100%' }], { duration: 4000, fill: 'forwards' });
+      const gen = state.gen;
+      state.restartTimer = setTimeout(() => { if (gen === state.gen) (nextStage ? playStage(nextStage) : newLiveGame()); }, 4000);
+    }
+  }
+
+  // ---- controls ---------------------------------------------------------
+  function setPlaying(p) {
+    state.playing = p;
+    $('b-play').textContent = p ? 'Pause' : 'Play';
+    if (!p) { clearTimeout(state.restartTimer); return; }
+    if (state.over) {
+      if (state.mode === 'live') newLiveGame();
+      else if (state.replay) startReplay(state.replayKey, state.replay.rec, state.replay.label);
+      return;
+    }
+    run();
+  }
+  $('b-play').onclick = () => setPlaying(!state.playing);
+  $('b-step').onclick = async () => {
+    if (state.playing) setPlaying(false);
+    if (state.over || state.busy || (state.mode === 'live' && !engine.ready)) return;
+    state.busy = true;
+    try { await step(true); } finally { state.busy = false; }
+  };
+  $('b-new').onclick = () => newLiveGame();
+  $('back-live').onclick = () => newLiveGame();
+  const speedEl = $('speed');
+  const speedLabel = () => { const s = SPEEDS[state.speed]; $('speed-out').textContent = isFinite(s) ? `${s} moves/s` : 'Max'; };
+  speedEl.oninput = () => { state.speed = +speedEl.value; speedLabel(); };
+  function setBudget(ms, save) {
+    state.budget = ms;
+    document.querySelectorAll('#think button').forEach((x) => x.setAttribute('aria-pressed', String(+x.dataset.ms === ms)));
+    if (save) { try { localStorage.setItem('think-ms', String(ms)); } catch (e) {} }
+    if (state.mode === 'live' && !state.over) setMode(`Live · ${budgetLabel()}`, true);
+  }
+  document.querySelectorAll('#think button').forEach((b) => { b.onclick = () => setBudget(+b.dataset.ms, true); });
+  document.addEventListener('keydown', (e) => {
+    if (e.target.closest && e.target.closest('input, textarea')) return;
+    if (e.key === ' ') { e.preventDefault(); setPlaying(!state.playing); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); $('b-step').click(); }
+    else if (e.key === 'n' || e.key === 'N') $('b-new').click();
+  });
+  try {
+    const ms = localStorage.getItem('think-ms');
+    if (ms !== null && document.querySelector(`#think button[data-ms="${ms}"]`)) setBudget(+ms, false);
+  } catch (e) {}
+  speedLabel();
+
+  // ---- tally ------------------------------------------------------------
+  function renderTally() {
+    $('tally-count').textContent = `${tally.length} game${tally.length === 1 ? '' : 's'}`;
+    if (!tally.length) return;
+    $('t-best').textContent = compact(Math.max(...tally.map((t) => t.score)));
+    $('t-avg').textContent = compact(tally.reduce((a, t) => a + t.score, 0) / tally.length);
+    $('t-16k').textContent = Math.round((100 * tally.filter((t) => t.max >= 14).length) / tally.length) + '%';
+    const chips = $('t-chips');
+    chips.textContent = '';
+    for (const t of tally.slice(-60)) {
+      const c = document.createElement('div');
+      c.className = 'mini';
+      c.title = `${2 ** t.max} tile, score ${fmt(t.score)}`;
+      c.textContent = compact(2 ** t.max);
+      tileStyle(c, t.max);
+      chips.appendChild(c);
+    }
+  }
+
+  // ---- replays ----------------------------------------------------------
+  function buildReplays() {
+    const box = $('replays');
+    box.textContent = '';
+    for (const r of DATA.replays) {
+      const b = document.createElement('button');
+      b.className = 'rp';
+      b.dataset.key = r.key;
+      b.setAttribute('aria-pressed', 'false');
+      b.innerHTML = `<b>${r.title}</b><span><i class="sw"></i>${fmt(r.game.max)} · ${compact(r.game.score)} pts</span>`;
+      tileStyle(b.querySelector('.sw'), Math.log2(r.game.max));
+      b.onclick = () => { playStage(r); $('board').scrollIntoView({ behavior: reducedMotion() ? 'auto' : 'smooth', block: 'center' }); };
+      box.appendChild(b);
+    }
+    $('b-learn').onclick = () => {
+      // Early games are short; play them quickly so the tour reaches the trained network.
+      if (state.speed < 5) { state.speed = 5; speedEl.value = 5; speedLabel(); }
+      playStage(DATA.replays.find((r) => r.stage));
+      $('board').scrollIntoView({ behavior: reducedMotion() ? 'auto' : 'smooth', block: 'center' });
+    };
+  }
+  function playStage(r) {
+    if (!state.playing) { state.playing = true; $('b-play').textContent = 'Pause'; }
+    startReplay(r.key, r.game, r.label);
+    markChartMilestone(r.trained);
+    const stages = DATA.replays.filter((x) => x.stage);
+    const i = stages.indexOf(r);
+    $('learn-status').textContent = i >= 0 ? `Stage ${i + 1} of ${stages.length}: ${r.title.toLowerCase()}` : '';
+  }
+  function nextStageAfter(key) {
+    const stages = DATA.replays.filter((x) => x.stage);
+    const i = stages.findIndex((x) => x.key === key);
+    return i >= 0 && i + 1 < stages.length ? stages[i + 1] : null;
+  }
+  function markReplayButtons() {
+    document.querySelectorAll('.rp').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.key === state.replayKey)));
+    if (state.mode === 'live') markChartMilestone(null);
+  }
+
+  // ---- charts -----------------------------------------------------------
+  const charts = [];
+  function markChartMilestone(n) { charts.forEach((c) => c.mark(n)); }
+  function lineChart(host, opts) {
+    const W = 520, H = 250, M = { l: 46, r: 64, t: 10, b: 30 };
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svg.setAttribute('role', 'img');
+    svg.setAttribute('aria-label', opts.aria);
+    const el = (tag, attrs, parent = svg) => { const e = document.createElementNS(ns, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); parent.appendChild(e); return e; };
+    const xs = opts.x;
+    const x0 = Math.log10(xs[0]), x1 = Math.log10(xs[xs.length - 1]);
+    const X = (v) => M.l + ((Math.log10(v) - x0) / Math.max(1e-9, x1 - x0)) * (W - M.l - M.r);
+    const Y = (v) => H - M.b - (v / opts.yMax) * (H - M.t - M.b);
+    for (const t of opts.yTicks) {
+      el('line', { x1: M.l, x2: W - M.r, y1: Y(t), y2: Y(t), class: t === 0 ? 'ax' : 'gl' });
+      el('text', { x: M.l - 8, y: Y(t) + 3.5, 'text-anchor': 'end' }).textContent = opts.yFmt(t);
+    }
+    for (let p = Math.ceil(x0); p <= Math.floor(x1); p++) {
+      const v = 10 ** p;
+      el('line', { x1: X(v), x2: X(v), y1: H - M.b, y2: H - M.b + 4, class: 'ax' });
+      el('text', { x: X(v), y: H - M.b + 17, 'text-anchor': 'middle' }).textContent = compact(v);
+    }
+    el('text', { x: W - M.r, y: H - 2, 'text-anchor': 'end' }).textContent = 'training games (log scale)';
+    const marker = el('line', { y1: M.t, y2: H - M.b, class: 'marker', visibility: 'hidden' });
+    for (const s of opts.series) {
+      const pts = xs.map((x, i) => `${X(x).toFixed(1)},${Y(s.y[i]).toFixed(1)}`);
+      if (opts.area) el('path', { d: `M${X(xs[0])},${Y(0)}L${pts.join('L')}L${X(xs[xs.length - 1])},${Y(0)}Z`, class: 'area', fill: s.color });
+      el('path', { d: 'M' + pts.join('L'), class: 'ln', stroke: s.color });
+    }
+    const ends = opts.series.map((s) => ({ s, y: Y(s.y[s.y.length - 1]) })).sort((a, b) => a.y - b.y);
+    for (let i = 1; i < ends.length; i++) if (ends[i].y - ends[i - 1].y < 12) ends[i].y = ends[i - 1].y + 12;
+    for (const e of ends) el('text', { x: W - M.r + 8, y: e.y + 3.5, class: 'endlbl' }).textContent = e.s.endLabel;
+    const cross = el('line', { y1: M.t, y2: H - M.b, class: 'cross', visibility: 'hidden' });
+    const dots = opts.series.map((s) => el('circle', { r: 4, fill: s.color, stroke: 'var(--panel)', 'stroke-width': 2, visibility: 'hidden' }));
+    const hit = el('rect', { x: M.l, y: M.t, width: W - M.l - M.r, height: H - M.t - M.b, fill: 'transparent' });
+    host.appendChild(svg);
+    if (opts.series.length > 1) {
+      const lg = document.createElement('div');
+      lg.className = 'legend';
+      lg.innerHTML = opts.series.map((s) => `<span><i style="background:${s.color}"></i>${s.name}</span>`).join('');
+      host.insertBefore(lg, svg);
+    }
+    const tip = document.createElement('div');
+    tip.className = 'tip';
+    tip.hidden = true;
+    host.appendChild(tip);
+    const move = (ev) => {
+      const r = svg.getBoundingClientRect();
+      const px = ((ev.clientX - r.left) / r.width) * W;
+      let best = 0, bd = Infinity;
+      xs.forEach((x, i) => { const d = Math.abs(X(x) - px); if (d < bd) { bd = d; best = i; } });
+      const cx = X(xs[best]);
+      cross.setAttribute('x1', cx); cross.setAttribute('x2', cx); cross.setAttribute('visibility', 'visible');
+      opts.series.forEach((s, k) => { dots[k].setAttribute('cx', cx); dots[k].setAttribute('cy', Y(s.y[best])); dots[k].setAttribute('visibility', 'visible'); });
+      tip.innerHTML = `<div class="row" style="color:var(--muted)">after ${fmt(xs[best])} games</div>` +
+        opts.series.map((s) => `<div class="row"><span><i style="background:${s.color}"></i>${s.name}</span><b>${opts.tipFmt(s.y[best])}</b></div>`).join('');
+      tip.hidden = false;
+      const hr = host.getBoundingClientRect();
+      let left = ev.clientX - hr.left + 14;
+      if (left + tip.offsetWidth > hr.width - 6) left = ev.clientX - hr.left - tip.offsetWidth - 14;
+      tip.style.left = Math.max(6, left) + 'px';
+      tip.style.top = (r.top - hr.top + 20) + 'px';
+    };
+    const leave = () => { tip.hidden = true; cross.setAttribute('visibility', 'hidden'); dots.forEach((d) => d.setAttribute('visibility', 'hidden')); };
+    hit.addEventListener('pointermove', move);
+    hit.addEventListener('pointerdown', move);
+    hit.addEventListener('pointerleave', leave);
+    return {
+      mark(n) {
+        if (n == null || n < xs[0] || n > xs[xs.length - 1]) { marker.setAttribute('visibility', 'hidden'); return; }
+        marker.setAttribute('x1', X(n)); marker.setAttribute('x2', X(n)); marker.setAttribute('visibility', 'visible');
+      },
+    };
+  }
+  function niceMax(v) { const p = 10 ** Math.floor(Math.log10(v)); for (const m of [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (m * p >= v) return m * p; return 10 * p; }
+  function buildCharts() {
+    const L = DATA.log;
+    if (L.length < 2) return;
+    const x = L.map((r) => r.games);
+    const scoreMax = niceMax(Math.max(...L.map((r) => r.avg)) * 1.05);
+    charts.push(lineChart($('c-score'), {
+      aria: 'Average score rising with training games', x, yMax: scoreMax,
+      yTicks: [0, 0.25, 0.5, 0.75, 1].map((f) => f * scoreMax), yFmt: compact, tipFmt: fmt, area: true,
+      series: [{ name: 'Average score', color: 'var(--accent)', y: L.map((r) => r.avg), endLabel: compact(L[L.length - 1].avg) }],
+    }));
+    const T = [['2048', 'r2048', '--l2048'], ['4096', 'r4096', '--l4096'], ['8192', 'r8192', '--l8192'], ['16384', 'r16384', '--l16384'], ['32768', 'r32768', '--l32768']];
+    const used = T.filter((t) => L.some((r) => r[t[1]] > 0));
+    charts.push(lineChart($('c-tiles'), {
+      aria: 'Share of games reaching 2048 and larger tiles', x, yMax: 1,
+      yTicks: [0, 0.25, 0.5, 0.75, 1], yFmt: (v) => Math.round(v * 100) + '%', tipFmt: (v) => (v * 100).toFixed(1) + '%',
+      series: used.map((t) => ({ name: t[0], color: `var(${t[2]})`, y: L.map((r) => r[t[1]]), endLabel: `${t[0]} ${Math.round(L[L.length - 1][t[1]] * 100)}%` })),
+    }));
+  }
+
+  // ---- anatomy ----------------------------------------------------------
+  function searchName(e) {
+    if (e.time_ms > 0) return `${e.time_ms / 1000} s per move`;
+    return e.depth === 1 ? 'Network only' : `Depth ${e.depth} search`;
+  }
+  function buildInside() {
+    const m = DATA.meta;
+    const box = $('patterns');
+    m.patterns.forEach((cells, i) => {
+      const p = document.createElement('div');
+      p.className = 'pat';
+      p.innerHTML = `<div class="g">${Array.from({ length: 16 }, (_, k) => `<div class="${cells.includes(k) ? 'on' : ''}"></div>`).join('')}</div><span class="label">Window ${i + 1}</span>`;
+      box.appendChild(p);
+    });
+    const facts = [
+      ['Weights', `${fmt(m.weights)}`],
+      ['Weights it ever adjusted', compact(m.touched)],
+      ['Weights shipped to this page', compact(m.shipped)],
+      ['Training games', fmt(m.games)],
+      ['Training moves', compact(m.moves)],
+      ['Training time', m.hours.toFixed(1) + ' h on 4 CPU cores'],
+      ['Learning rule', 'TD(0) + temporal coherence'],
+      ['Search speed in your browser', '<span id="f-nps">measuring…</span>'],
+    ];
+    $('facts').innerHTML = facts.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('');
+    const pct = (v) => (v * 100).toFixed(v >= 0.995 || v === 0 ? 0 : 1) + '%';
+    let html = '<thead><tr><th>Search</th><th>Games</th><th>Avg score</th><th>2048</th><th>4096</th><th>8192</th><th>16384</th><th>32768</th><th>Time / move</th></tr></thead><tbody>';
+    for (const e of DATA.eval) {
+      const t = e.ms_per_move < 0.1 ? '<0.1 ms' : e.ms_per_move < 10 ? e.ms_per_move.toFixed(1) + ' ms' : Math.round(e.ms_per_move) + ' ms';
+      html += `<tr><td>${searchName(e)}</td><td>${fmt(e.games)}</td><td class="hl">${fmt(e.avg)}</td><td>${pct(e.r2048)}</td><td>${pct(e.r4096)}</td><td>${pct(e.r8192)}</td><td>${pct(e.r16384)}</td><td>${pct(e.r32768)}</td><td>${t}</td></tr>`;
+    }
+    $('eval').innerHTML = html + '</tbody>';
+    $('intro').textContent = `A neural network that taught itself 2048 by playing ${compact(m.games)} games, paired with a search engine that looks many moves ahead, the way a chess engine does. Both run right here in your browser.`;
+  }
+
+  // ---- loading ----------------------------------------------------------
+  async function fetchBytes(url, onProgress) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
+    const total = +res.headers.get('content-length') || 0;
+    if (!res.body || !total) return new Uint8Array(await res.arrayBuffer());
+    const reader = res.body.getReader();
+    const parts = [];
+    let got = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parts.push(value); got += value.length;
+      onProgress(Math.min(1, got / total));
+    }
+    const out = new Uint8Array(got);
+    let o = 0;
+    for (const p of parts) { out.set(p, o); o += p.length; }
+    return out;
+  }
+  async function gunzip(bytes) {
+    if (bytes[0] !== 0x1f || bytes[1] !== 0x8b) return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+    return await new Response(stream).arrayBuffer();
+  }
+
+  async function measureSpeed() {
+    // One deeper search on a fixed midgame position, for the statistics panel.
+    const b = new Uint8Array([0, 1, 0, 2, 0, 3, 2, 1, 4, 5, 6, 0, 12, 10, 8, 9]);
+    const r = await engine.think(b, { depth: 5 });
+    if (r.nodes && $('f-nps')) $('f-nps').textContent = `${compact((r.nodes / r.ms) * 1000)} positions/s`;
+    else if ($('f-nps')) $('f-nps').textContent = 'JavaScript fallback';
+  }
+
+  async function boot() {
+    try {
+      const res = await fetch('data.json');
+      if (!res.ok) throw new Error('data.json: HTTP ' + res.status);
+      DATA = await res.json();
+    } catch (e) {
+      $('mode-text').textContent = 'Could not load training data';
+      $('load-note').textContent = 'The page could not load its data file. Reload to try again.';
+      return;
+    }
+    buildReplays();
+    buildCharts();
+    buildInside();
+    playStage(DATA.replays.find((r) => r.stage) || DATA.replays[0]);
+
+    try {
+      const parts = DATA.meta.weightFiles;
+      const wasmP = fetch('engine.wasm').then((r) => { if (!r.ok) throw new Error('engine.wasm: HTTP ' + r.status); return r.arrayBuffer(); });
+      const chunks = [];
+      // Weight parts are base64 text (gzip inside); each part decodes on its own.
+      for (let i = 0; i < parts.length; i++) {
+        const text = await fetchBytes(parts[i], (f) => { $('load-bar').style.width = ((100 * (i + f)) / parts.length).toFixed(1) + '%'; });
+        const bin = atob(new TextDecoder().decode(text).trim());
+        const bytes = new Uint8Array(bin.length);
+        for (let k = 0; k < bin.length; k++) bytes[k] = bin.charCodeAt(k);
+        chunks.push(bytes);
+      }
+      let len = 0;
+      for (const c of chunks) len += c.length;
+      const all = new Uint8Array(len);
+      let o = 0;
+      for (const c of chunks) { all.set(c, o); o += c.length; }
+      $('load-label').textContent = 'Starting engine';
+      const net = await gunzip(all);
+      const info = await engine.start(await wasmP, net);
+      $('load-bar').style.width = '100%';
+      $('load-panel').hidden = true;
+      if (info.engine !== 'wasm') $('eval-note').textContent += ' This browser could not run WebAssembly, so live play uses a slower fixed-depth JavaScript search.';
+      measureSpeed().catch(() => {});
+      if (state.mode === 'replay' && !state.over) setMode(`Replay · ${state.replay.label}`, false);
+      else newLiveGame();
+    } catch (e) {
+      $('load-label').textContent = 'Not loaded';
+      $('load-note').textContent = `The engine did not start (${e.message}). Replays still work; reload the page to try live play again.`;
+    }
+  }
+  boot();
+})();
+</script>
