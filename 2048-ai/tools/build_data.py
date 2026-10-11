@@ -155,7 +155,26 @@ def main(run, out):
         path = os.path.join(run, fname)
         if os.path.exists(path):
             events.append({"games": int(open(path).read().strip()), "label": label})
-    data = {"events": events, "meta": meta_out, "log": bin_log(log), "replays": replays, "eval": evals, "showcase": showcase}
+    # Endgame drills: points added from a fresh 16384 tile, per 50K training games.
+    drills, cur, edge = [], [], None
+    for r in log:
+        if not r.get("drills"):
+            continue
+        b = int(r["games"] // 50000)
+        if edge is not None and b != edge and cur:
+            drills.append(cur)
+            cur = []
+        edge = b
+        cur.append(r)
+    if cur:
+        drills.append(cur)
+    drills = [{"games": round(sum(r["games"] for r in c) / len(c)),
+               "gain": round(sum(r["drill_gain"] * r["drills"] for r in c) / sum(r["drills"] for r in c)),
+               "r32768": round(sum(r["drill_r32768"] * r["drills"] for r in c) / sum(r["drills"] for r in c), 5),
+               "n": int(sum(r["drills"] for r in c))} for c in drills]
+    endgame = sorted((json.load(open(p)) for p in glob.glob(os.path.join(run, "endgame_*.json"))),
+                     key=lambda e: (e.get("time_ms", 0) > 0, e.get("time_ms", 0), e["depth"]))
+    data = {"drills": drills, "endgame": endgame, "events": events, "meta": meta_out, "log": bin_log(log), "replays": replays, "eval": evals, "showcase": showcase}
     with open(os.path.join(out, "data.json"), "w") as f:
         json.dump(data, f, separators=(",", ":"))
     print(f"wrote {out}/data.json: {len(data['log'])} chart points, {len(replays)} replays, "

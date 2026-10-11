@@ -81,6 +81,13 @@ __attribute__((export_name("think"))) int think(unsigned lo, unsigned hi, double
   return last.dir;
 }
 
+// Same, with the budget scaled up in critical positions (see critical_budget in search.h).
+__attribute__((export_name("think_critical"))) int think_critical(unsigned lo, unsigned hi, double base_ms, int max_depth) {
+  board_t b = join(lo, hi);
+  last = engine.think(b, critical_budget(b, base_ms), max_depth, clock_ms);
+  return last.dir;
+}
+
 // Fixed-depth search.
 __attribute__((export_name("search_depth"))) int search_depth(unsigned lo, unsigned hi, int depth) {
   double t0 = js_now();

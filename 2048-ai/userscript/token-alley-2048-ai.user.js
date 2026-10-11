@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Token Alley 2048 AI
 // @namespace    https://github.com/orangejack9christian/Claude-etc
-// @version      1.1.0
+// @version      1.2.0
 // @description  Lets the self-taught 2048 network and its look-ahead search play the 2048 cabinet in Token Alley. AI games never count toward your bests or the hall of fame, and it stays off in online races.
 // @match        https://*/*
 // @match        file:///*
@@ -263,7 +263,7 @@
             postMessage({ type: 'ready' });
           } else {
             const [lo, hi] = pack(m.board);
-            const dir = ex.think(lo, hi, m.budget, 30);
+            const dir = (ex.think_critical || ex.think)(lo, hi, m.budget, 30);   // more time when the board is tight
             postMessage({ type: 'result', id: m.id, dir, values: [0, 1, 2, 3].map((d) => ex.result_value(d)), depth: ex.result_depth(), nodes: ex.result_nodes(), ms: ex.result_ms() });
           }
         } catch (err) { postMessage({ type: 'error', id: m.id, message: String(err && err.message || err) }); }
@@ -306,7 +306,7 @@
       return async (b, budget) => {
         let lo = 0, hi = 0;
         for (let i = 0; i < 8; i++) { lo |= b[i] << (4 * i); hi |= b[i + 8] << (4 * i); }
-        const dir = ex.think(lo >>> 0, hi >>> 0, Math.min(budget, 50), 30);
+        const dir = ex.think(lo >>> 0, hi >>> 0, Math.min(budget, 50), 30);   // main thread: keep it short
         return { dir, values: [0, 1, 2, 3].map((d) => ex.result_value(d)), depth: ex.result_depth(), nodes: ex.result_nodes(), ms: ex.result_ms() };
       };
     }
@@ -355,7 +355,9 @@
         q('.e-move').textContent = ARROWS[r.dir];
         q('.e-depth').textContent = r.depth;
         q('.e-nodes').textContent = r.nodes ? compact(r.nodes) : '–';
-        status(`Playing · ${settings.think ? settings.think / 1000 + ' s' : 'instant'} per move`);
+        status(r.ms > settings.think * 1.5 && settings.think > 0
+          ? `Thinking hard: tight board, ${(r.ms / 1000).toFixed(1)} s on that move`
+          : `Playing · ${settings.think ? settings.think / 1000 + ' s' : 'instant'} per move`);
         // Never faster than the chosen pace, however quickly the engine answered.
         await sleep(Math.max(0, 1000 / SPEEDS[settings.speed] - (performance.now() - t0)));
       }

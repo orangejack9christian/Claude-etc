@@ -32,8 +32,10 @@ dying right after the 16384 tile:
   is saved, and half of all training games start from a saved one with fresh random
   tiles, so the hardest part of the game gets most of the practice (as in Yeh et al.'s
   multi-stage TD learning).
-- From game 1.65M, a third stage for positions holding both a 16384 and an 8192, the
-  stretch right before the final merge into 32768.
+- A third stage for positions holding both a 16384 and an 8192 was tried from game 1.65M
+  and reverted: endgame drill scores fell from about 108K to 94K points over 230K games,
+  likely because boards flip in and out of that stage every few hundred moves, splitting
+  the data. Training continued from the two-stage checkpoint. (`--stages 3` still works.)
 
 **Endgame benchmark.** `bench/late16k.txt` holds 311 positions captured at the moment a
 game first made its 16384 tile. `play --starts bench/late16k.txt` replays them with fixed

@@ -25,6 +25,15 @@ struct SearchResult {
   double ms = 0;
 };
 
+// Time management, as a chess engine does: spend the budget where the game is decided.
+// From the 8192 tile on, a board with few empty cells is one wrong move from the end,
+// so it gets several times the base thinking time; open boards are easy and keep the base.
+inline double critical_budget(board_t b, double base_ms) {
+  if (base_ms <= 0 || max_tile(b) < 13) return base_ms;
+  int e = count_empty(b);
+  return base_ms * (e >= 6 ? 1 : e >= 4 ? 2 : e >= 2 ? 4 : 6);
+}
+
 template <class Eval>
 struct Expectimax {
   const Eval* ev = nullptr;

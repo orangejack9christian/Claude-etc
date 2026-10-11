@@ -34,7 +34,9 @@ async function init(m) {
 function think(m) {
   if (ex) {
     const [lo, hi] = pack(m.board);
-    const dir = m.depth ? ex.search_depth(lo, hi, m.depth) : ex.think(lo, hi, m.budget, m.maxDepth || 30);
+    // think_critical spends extra time when the board is tight (older engine files lack it).
+    const think = ex.think_critical || ex.think;
+    const dir = m.depth ? ex.search_depth(lo, hi, m.depth) : think(lo, hi, m.budget, m.maxDepth || 30);
     return {
       dir, values: [0, 1, 2, 3].map((d) => ex.result_value(d)),
       depth: ex.result_depth(), nodes: ex.result_nodes(), ms: ex.result_ms(),

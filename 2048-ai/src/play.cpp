@@ -33,7 +33,7 @@ struct Options {
   int games = 100, depth = 1, threads = 4, prune = 0, prune_late = -1, max_depth = 20, tt_bits = 22, extra = 0;
   double time_ms = 0;
   float cut = 1e-4f;
-  bool quant = false;
+  bool quant = false, adaptive = false;
   uint64_t seed = 12345;
 };
 
@@ -43,7 +43,8 @@ static double now_ms() {
 
 template <class Eval>
 static int run(const Eval& ev, uint64_t trained, const Options& o) {
-  std::string mode = o.time_ms > 0 ? "iterative deepening, " + std::to_string((int)o.time_ms) + " ms/move"
+  std::string mode = o.time_ms > 0 ? "iterative deepening, " + std::to_string((int)o.time_ms) + " ms/move" +
+                                         (o.adaptive ? " (more in tight positions)" : "")
                                    : "depth " + std::to_string(o.depth) +
                                          (o.extra ? " (+" + std::to_string(o.extra) + " per critical level)" : "");
   printf("network trained on %" PRIu64 " games; %s; %d games\n", trained, mode.c_str(), o.games);
@@ -90,7 +91,8 @@ static int run(const Eval& ev, uint64_t trained, const Options& o) {
       double ms = 0;
       for (;;) {
         double ts = now_ms();
-        SearchResult r = o.time_ms > 0 ? s.think(b, o.time_ms, o.max_depth, now_ms)
+        double budget = o.adaptive ? critical_budget(b, o.time_ms) : o.time_ms;
+        SearchResult r = o.time_ms > 0 ? s.think(b, budget, o.max_depth, now_ms)
                          : o.extra   ? s.adaptive(b, o.depth, o.extra)
                                      : s.fixed(b, o.depth);
         ms += now_ms() - ts;
@@ -165,11 +167,11 @@ static int run(const Eval& ev, uint64_t trained, const Options& o) {
   if (!o.summary.empty()) {
     FILE* f = fopen(o.summary.c_str(), "w");
     fprintf(f,
-            "{\"depth\":%d,\"extra\":%d,\"time_ms\":%.0f,\"cut\":%g,\"games\":%zu,\"avg\":%.1f,\"median\":%" PRIu64
+            "{\"depth\":%d,\"extra\":%d,\"adaptive\":%s,\"time_ms\":%.0f,\"cut\":%g,\"games\":%zu,\"avg\":%.1f,\"median\":%" PRIu64
             ",\"max\":%" PRIu64
             ",\"r2048\":%.4f,\"r4096\":%.4f,\"r8192\":%.4f,\"r16384\":%.4f,\"r32768\":%.4f,"
             "\"ms_per_move\":%.4f,\"avg_depth\":%.2f,\"nodes_per_sec\":%.0f}\n",
-            o.depth, o.extra, o.time_ms, o.cut, scores.size(), avg, sorted[sorted.size() / 2], sorted.back(), rate[11],
+            o.depth, o.extra, o.adaptive ? "true" : "false", o.time_ms, o.cut, scores.size(), avg, sorted[sorted.size() / 2], sorted.back(), rate[11],
             rate[12], rate[13], rate[14], rate[15], ms_move, avg_depth, nps);
     fclose(f);
   }
@@ -200,6 +202,7 @@ int main(int argc, char** argv) {
     else if (a == "--seed") o.seed = std::stoull(nxt());
     else if (a == "--tt-bits") o.tt_bits = std::stoi(nxt());
     else if (a == "--extra") o.extra = std::stoi(nxt());
+    else if (a == "--adaptive") o.adaptive = true;
     else if (a == "--dump-late") o.dump_late = nxt();
     else if (a == "--starts") o.starts = nxt();
     else {
