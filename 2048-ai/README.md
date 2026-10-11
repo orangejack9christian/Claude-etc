@@ -35,6 +35,30 @@ deepening under a time budget, a transposition table, and skips chance branches 
 probability falls below 1e-4. The same C++ (`src/search.h`, `src/sparse.h`) runs natively
 for benchmarks and as freestanding WebAssembly in the browser (`wasm/engine.cpp`).
 
+## Play it in Token Alley (Tampermonkey)
+
+`userscript/token-alley-2048-ai.user.js` lets the network and its search play the 2048
+cabinet in the Token Alley arcade, in your own browser.
+
+1. Install the [Tampermonkey](https://www.tampermonkey.net/) extension. In Chrome, also turn
+   on "Allow User Scripts" for it (Extensions > Tampermonkey > Details).
+2. Open the script's raw file on GitHub and press Install:
+   `https://raw.githubusercontent.com/orangejack9christian/Claude-etc/claude/zealous-babbage-prlf3t/2048-ai/userscript/token-alley-2048-ai.user.js`
+3. Open the arcade, open the 2048 cabinet, press Play, then "Let the AI play" in the panel
+   at the bottom right. The first time, it downloads the network (about 47 MB) and caches it.
+
+How it plays: it reads the board from the cabinet's game object (`Arcade.games` entry
+`2048`, whose `tiles` hold `{ r, c, v }`), runs the same WebAssembly search as the viewer in
+a background worker, and presses the arrow key for the chosen move, at 1 to 6 moves a
+second (2 by default) so you can follow it.
+
+Fair play: a game the AI made any move in never saves its score, best tile or hall-of-fame
+entry, and the AI stays off in online races, which are live against other players.
+
+If the panel never appears, the arcade is probably served from a domain the script's
+`@match` lines don't list. Find the arcade frame's address (DevTools > Console, the frame
+picker at the top) and add a matching `@match` line in Tampermonkey's editor.
+
 ## Layout
 
 ```
@@ -48,6 +72,7 @@ src/export.cpp   exports the network sparse + int16-quantized for the viewer
 src/test.cpp     engine tests against a naive implementation
 wasm/engine.cpp  WebAssembly entry points for the browser
 tools/release.sh export + benchmark + build viewer/data.json from a training run
+userscript/      Tampermonkey script that plays the Token Alley arcade's 2048 cabinet
 viewer/          the web page (index.html, engine.js, worker.js, engine.wasm, data)
 ```
 

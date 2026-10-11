@@ -18,7 +18,7 @@ EVALS=${EVALS:-"1:2000 2:1000 3:200"}
 THREADS=${THREADS:-$(nproc)}
 
 make -s all
-build/export --weights "$RUN/weights.bin" --prune "$PRUNE" --out "$RUN/net.bin" --meta "$RUN/net_meta.json"
+build/export --weights "${WEIGHTS:-$RUN/weights.bin}" --prune "$PRUNE" --out "$RUN/net.bin" --meta "$RUN/net_meta.json"
 gzip -9 -c "$RUN/net.bin" > "$RUN/net.bin.gz"
 rm -f viewer/net-*.bin viewer/net-*.txt
 base64 -w0 "$RUN/net.bin.gz" | split -b 10000000 -d -a 1 --additional-suffix=.txt - viewer/net-
