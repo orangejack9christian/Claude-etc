@@ -13,6 +13,13 @@ by letter with text tools. It replaces "Auto Combiner Pro v5.1".
 3. Create a new script and paste in `word-forge-pro.user.js`, or open the raw file URL and let
    the extension install it. If Tampermonkey asks whether the script may connect to
    `infinibrowser.wiki`, choose **Always allow**: that's how it looks up recipes.
+
+If the panel says it can't reach Infinibrowser, click **Open Infinibrowser tab** (in the card
+or under Settings & Data) and keep that tab open. The script also runs there and fetches
+recipes for the game tab. This works even when the game page itself is blocked, and it gets
+past Infinibrowser's "checking your browser" page because you pass it in that tab. Allow
+pop-ups for neal.fun if the browser blocks the tab. **Test Connection** shows what each route
+to Infinibrowser returned; send that text if something still fails.
 4. Open neal.fun/infinite-craft, click the panel's **Words to make** box, type your words, and
    press **Start** (or Ctrl+Enter). Press Esc to leave the box; typing anywhere else goes to
    the game's search bar as usual.
@@ -73,6 +80,12 @@ exist.
 
 ## Changelog
 
+- **6.3.0**: When a word fails, the card now says why (not just "Could not make") and offers
+  the fix. New **Open Infinibrowser tab** relay: the script also runs on infinibrowser.wiki and
+  fetches recipes for the game tab. It talks over postMessage, or through shared userscript
+  storage when the tabs aren't linked. Requests try the relay tab, then the userscript
+  manager, then a direct request, and keep each route's error. New **Test Connection**
+  button.
 - **6.2.0**: Works with the updated Infinite Craft client. It crafts through the game's own
   `window.IC` API (places both items on the board and combines them, like dragging) and
   falls back to the old method on older versions. It reaches Infinibrowser through the
@@ -133,7 +146,7 @@ node test/run-sim.js --seed w9 --noise 0.3 "Fire Truck" Zorblaxian
 SIM_VERBOSE=1 node test/run-sim.js Qwxyzzy   # print the forge log and the recipe used
 node test/ui-smoke.js     # clicks through every panel control
 node test/keyboard.js     # typing in the panel isn't stolen by the game's search bar
-node test/connection.js   # blocked / "checking your browser" Infinibrowser, and recovery
+node test/connection.js   # blocked / "checking your browser" Infinibrowser, recovery, relay tab
 node test/run-sim.js --legacy Dragon   # the pre-2026 game client
 ```
 

@@ -1,13 +1,17 @@
 // ==UserScript==
 // @name         Infinite Craft - Word Forge Pro (Auto Combiner v6)
 // @namespace    https://neal.fun/infinite-craft/
-// @version      6.2.0
+// @version      6.3.0
 // @description  Type any word and it gets crafted: looks it up on Infinibrowser and crafts the uploaded recipe (self-healing), or builds brand-new words letter by letter with text tools learned from Infinibrowser. No random combining. Keeps the National Pokedex queue, history and save tools.
 // @match        https://neal.fun/infinite-craft*
+// @match        https://infinibrowser.wiki/*
 // @run-at       document-start
 // @grant        GM_xmlhttpRequest
 // @grant        GM.xmlHttpRequest
 // @grant        unsafeWindow
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_addValueChangeListener
 // @connect      infinibrowser.wiki
 // ==/UserScript==
 
@@ -17,12 +21,78 @@
   // Page globals (the game's window.IC, ...) live on unsafeWindow when the userscript
   // manager runs the script in its sandbox; without a sandbox they're on window.
   const W = (typeof unsafeWindow !== 'undefined' && unsafeWindow) ? unsafeWindow : window;
+
+  // Userscript-manager storage shared by this script in every tab (a second channel for the
+  // Infinibrowser relay that works even when the tabs can't message each other directly).
+  const GMS = (() => {
+    try {
+      if (typeof GM_setValue === 'function' && typeof GM_getValue === 'function' && typeof GM_addValueChangeListener === 'function') {
+        return { set: GM_setValue, get: GM_getValue, listen: GM_addValueChangeListener };
+      }
+    } catch (e) {}
+    return null;
+  })();
+  const RELAY_REQ = 'icforge_relay_req', RELAY_RES = 'icforge_relay_res', RELAY_READY = 'icforge_relay_ready';
+
+  // On infinibrowser.wiki this script is only a relay: the game tab can ask it to fetch
+  // Infinibrowser API data, which works there even when the game page itself is blocked
+  // (cross-site rules, or Cloudflare's "checking your browser" page you pass in that tab).
+  if (/(^|\.)infinibrowser\.wiki$/.test(location.hostname)) {
+    runInfinibrowserRelay();
+    return;
+  }
   if (W._icAutoInstance) { console.warn('[WordForge] Already running.'); return; }
+
+  function runInfinibrowserRelay() {
+    const GAME = 'https://neal.fun';
+    const checking = () => /just a moment/i.test(document.title || '');
+    const fetchApi = async (path) => {
+      if (typeof path !== 'string' || path.indexOf('/api/') !== 0) return { error: 'bad path' };
+      try {
+        const res = await fetch(location.origin + path, { headers: { Accept: 'application/json' }, credentials: 'same-origin' });
+        return { status: res.status, text: await res.text() };
+      } catch (err) {
+        return { error: String((err && err.message) || err) };
+      }
+    };
+    // Channel 1: postMessage with the game tab that opened this one.
+    window.addEventListener('message', async (e) => {
+      const d = e.data;
+      if (e.origin !== GAME || !d || d.icforge !== 'req') return;
+      const out = Object.assign({ icforge: 'res', id: d.id }, await fetchApi(d.path));
+      try { e.source.postMessage(out, e.origin); } catch (err) {}
+    });
+    // Channel 2: shared userscript storage (no tab link needed).
+    let outbox = [];
+    const seen = new Set();
+    const handle = (reqs) => {
+      for (const r of reqs || []) {
+        if (!r || seen.has(r.id) || Date.now() - r.ts > 60000) continue;
+        seen.add(r.id);
+        fetchApi(r.path).then((res) => {
+          outbox = outbox.concat([Object.assign({ id: r.id }, res)]).slice(-25);
+          GMS.set(RELAY_RES, outbox);
+        });
+      }
+    };
+    if (GMS) {
+      GMS.listen(RELAY_REQ, (name, oldV, newV) => handle(newV));
+      handle(GMS.get(RELAY_REQ, []));
+    }
+    const announce = () => {
+      if (checking()) return;
+      try { if (window.opener) window.opener.postMessage({ icforge: 'ready' }, GAME); } catch (e) {}
+      if (GMS) GMS.set(RELAY_READY, Date.now());
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', announce, { once: true });
+    else announce();
+    setInterval(announce, 2000);
+  }
 
   /* ============================================================
    * Config
    * ============================================================ */
-  const VERSION = '6.2.0';
+  const VERSION = '6.3.0';
 
   // Small settings stay in localStorage (same keys as v5.x so settings carry over).
   // Big learned data (tried pairs, pair results, Infinibrowser cache) lives in IndexedDB
@@ -446,26 +516,124 @@
     try { if (typeof GM !== 'undefined' && GM && typeof GM.xmlHttpRequest === 'function') return GM.xmlHttpRequest; } catch (e) {}
     return null;
   })();
-  function httpGet(url, timeout) {
-    if (GMX) {
-      return new Promise((resolve, reject) => {
-        try {
-          GMX({
-            method: 'GET', url, timeout,
-            headers: { Accept: 'application/json' },
-            onload: (r) => resolve({ status: r.status, text: r.responseText || '', via: 'gm' }),
-            onerror: () => reject(new Error('network')),
-            ontimeout: () => reject(new Error('timeout')),
-            onabort: () => reject(new Error('abort'))
-          });
-        } catch (e) { reject(e); }
-      });
-    }
+  function gmGet(url, timeout) {
+    return new Promise((resolve, reject) => {
+      const fail = (what) => (r) => reject(new Error((r && (r.error || r.statusText)) || what));
+      try {
+        GMX({
+          method: 'GET', url, timeout,
+          headers: { Accept: 'application/json' },
+          onload: (r) => resolve({ status: r.status, text: r.responseText || '', via: 'manager' }),
+          onerror: fail('network error'),
+          ontimeout: fail('timed out'),
+          onabort: fail('aborted')
+        });
+      } catch (e) { reject(e); }
+    });
+  }
+  function fetchGet(url, timeout) {
     const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const timer = ctrl ? setTimeout(() => ctrl.abort(), timeout) : null;
     return fetch(url, { headers: { Accept: 'application/json' }, signal: ctrl ? ctrl.signal : undefined })
-      .then(async (res) => ({ status: res.status, text: await res.text(), via: 'fetch' }))
+      .then(async (res) => ({ status: res.status, text: await res.text(), via: 'direct' }))
+      .catch((e) => { throw new Error(e && e.name === 'AbortError' ? 'timed out' : 'blocked by the browser (' + ((e && e.message) || e) + ')'); })
       .finally(() => { if (timer) clearTimeout(timer); });
+  }
+  // The infinibrowser.wiki tab relay (see runInfinibrowserRelay): postMessage when the tab
+  // was opened from here, shared userscript storage otherwise.
+  const Relay = {
+    win: null,
+    ready: false,
+    seq: 0,
+    pending: new Map(),
+    queue: [],
+    listeners: [],
+    wasAlive: false,
+    init() {
+      window.addEventListener('message', (e) => {
+        if (e.origin !== 'https://infinibrowser.wiki') return;
+        const d = e.data;
+        if (!d || !d.icforge) return;
+        if (d.icforge === 'ready') {
+          this.win = e.source;
+          this.ready = true;
+          this._changed();
+        } else if (d.icforge === 'res') this._answer(d);
+      });
+      if (GMS) {
+        GMS.listen(RELAY_RES, (name, oldV, newV) => { for (const r of newV || []) this._answer(r); });
+        GMS.listen(RELAY_READY, () => this._changed());
+      }
+      setInterval(() => this._changed(), 3000);
+    },
+    _answer(d) {
+      const cb = d && this.pending.get(d.id);
+      if (cb) { this.pending.delete(d.id); cb(d); }
+    },
+    _changed() {
+      const alive = this.alive();
+      if (alive && !this.wasAlive) for (const f of this.listeners) { try { f(); } catch (e) {} }
+      this.wasAlive = alive;
+    },
+    directAlive() {
+      try { return !!(this.ready && this.win && !this.win.closed); } catch (e) { return false; }
+    },
+    storageAlive() {
+      try { return !!(GMS && Date.now() - (GMS.get(RELAY_READY, 0) || 0) < 7000); } catch (e) { return false; }
+    },
+    alive() { return this.directAlive() || this.storageAlive(); },
+    open() {
+      this.ready = false;
+      this.win = window.open('https://infinibrowser.wiki/', 'icforge-infinibrowser');
+      return !!this.win;
+    },
+    get(url, timeout) {
+      return new Promise((resolve, reject) => {
+        const path = url.replace(/^https:\/\/infinibrowser\.wiki/, '');
+        const direct = this.directAlive();
+        if (!direct && !this.storageAlive()) { reject(new Error('Infinibrowser tab not open')); return; }
+        const id = 'r' + (++this.seq) + '-' + Date.now();
+        const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('Infinibrowser tab did not answer')); }, timeout);
+        this.pending.set(id, (d) => {
+          clearTimeout(timer);
+          if (d.error) reject(new Error(d.error));
+          else resolve({ status: d.status, text: d.text || '', via: 'tab' });
+        });
+        try {
+          if (direct) this.win.postMessage({ icforge: 'req', id, path }, 'https://infinibrowser.wiki');
+          else {
+            const t = Date.now();
+            this.queue = this.queue.filter((q) => t - q.ts < 60000).concat([{ id, path, ts: t }]).slice(-25);
+            GMS.set(RELAY_REQ, this.queue);
+          }
+        } catch (e) { clearTimeout(timer); this.pending.delete(id); reject(e); }
+      });
+    }
+  };
+  // Try every route to Infinibrowser: the relay tab if it's open, the userscript manager,
+  // then a direct request. Errors from each route are kept so the player can be told why.
+  async function httpGet(url, timeout) {
+    const errors = [];
+    let challenge = null;
+    if (Relay.alive()) {
+      try { return await Relay.get(url, timeout); } catch (e) { errors.push('tab: ' + e.message); }
+    }
+    if (GMX) {
+      try {
+        const r = await gmGet(url, timeout);
+        if (!((r.status === 403 || r.status === 503) && looksLikeChallenge(r))) return r;
+        challenge = r;
+        errors.push('userscript manager: Infinibrowser answered with its "checking your browser" page');
+      } catch (e) { errors.push('userscript manager: ' + e.message); }
+    }
+    try {
+      const r = await fetchGet(url, timeout);
+      if (!challenge || !((r.status === 403 || r.status === 503) && looksLikeChallenge(r))) return r;
+    } catch (e) { errors.push('direct: ' + e.message); }
+    if (challenge) return challenge;
+    const err = new Error(errors.join('; '));
+    err.routes = errors;
+    throw err;
   }
   const looksLikeChallenge = (r) => /<html|just a moment|cf-chl|challenge/i.test((r && r.text) || '');
 
@@ -517,19 +685,19 @@
     // Why Infinibrowser can't be used right now, in plain words (or '' when it's fine).
     problem() {
       if (this.challengeAt && now() - this.challengeAt < C.ib.offlineCooldown) {
-        return 'Infinibrowser is showing a "checking your browser" page. Open infinibrowser.wiki in a new tab once, then press Start again.';
+        return 'Infinibrowser wants to check your browser first. Click "Open Infinibrowser tab", let it finish loading, keep that tab open, then press Start.';
       }
       if (this.offline) {
-        return GMX ? "Can't reach infinibrowser.wiki right now (no connection, or it's blocked on this network)."
-          : 'The browser blocked the request to infinibrowser.wiki. Install this script with Tampermonkey or Violentmonkey and allow its connection to infinibrowser.wiki.';
+        return "The game page can't reach infinibrowser.wiki. Click \"Open Infinibrowser tab\" and keep that tab open: recipes will be fetched through it.";
       }
       return '';
     }
+    resetHealth() { this.offlineAt = 0; this.challengeAt = 0; this.failStreak = 0; }
     // Returns parsed JSON, null for a definite "unknown element", throws when unreachable.
     async _fetchJSON(path, params) {
       if (!this.enabled) throw new Error('ib-disabled');
       if (this.offline || (this.challengeAt && now() - this.challengeAt < C.ib.offlineCooldown)) throw new Error('ib-offline');
-      const url = C.ib.base + path + '?' + new URLSearchParams(params).toString();
+      const url = C.ib.base + path + '?' + Object.keys(params).map((k) => k + '=' + encodeURIComponent(params[k])).join('&');
       for (let attempt = 0; attempt <= C.ib.retries; attempt++) {
         const start = Math.max(now(), this.nextAt, this.cooldownUntil);
         this.nextAt = start + C.ib.gap;
@@ -539,6 +707,7 @@
         try {
           res = await httpGet(url, C.ib.timeout);
         } catch (e) {
+          this.lastError = e.message;
           this.failStreak++;
           if (this.failStreak >= 4) { this.offlineAt = now(); throw new Error('ib-offline'); }
           await sleep(500 * (attempt + 1));
@@ -577,9 +746,7 @@
     }
     // Live connection check (never cached): true, or false with problem() explaining why.
     async ping() {
-      this.offlineAt = 0;
-      this.challengeAt = 0;
-      this.failStreak = 0;
+      this.resetHealth();
       try { await this._fetchJSON('/item', { id: 'Water' }); return true; } catch (e) { if (!this.offline && !this.challengeAt) this.offlineAt = now(); return false; }
     }
     _get(key, path, params, transform, persist) {
@@ -2121,7 +2288,7 @@
       '#ic-log .log-entry .log-time{font-size:10px;opacity:.6;white-space:nowrap;}',
       '#ic-log .t-new{color:var(--ic-green);}#ic-log .t-first{color:var(--ic-orange);font-weight:700;}',
       '#ic-log .t-win{color:var(--ic-accent);font-weight:700;}#ic-log .t-fix{color:var(--ic-yellow);}',
-      '#ic-log .t-fail{color:var(--ic-red);}#ic-log .t-round{color:var(--ic-blue);}',
+      '#ic-log .t-fail{color:var(--ic-red);}#ic-log .t-round{color:var(--ic-blue);}#ic-log .t-diag{color:var(--ic-text);}',
       '#ic-log.hide-crafts .t-craft{display:none;}'
     ].join('\n');
     document.head.appendChild(s);
@@ -2185,22 +2352,66 @@
       this.renderInfo();
       this.status(this.game.hasApi() ? 'Ready. Type any word and press Start.' : 'Ready (game API not found yet; it may still be loading).', 's-ok');
       window.addEventListener('beforeunload', () => { this.mem.flush(); this.ib.save(); });
+      Relay.init();
+      Relay.listeners.push(() => this.onRelayReady());
       this.checkConnection();
       setInterval(() => this.renderInfo(), 3000);
     }
 
     // Make Infinibrowser problems visible up front instead of letting a run fail silently.
-    async checkConnection() {
+    async checkConnection(quiet) {
       const ok = await this.ib.ping();
       this.renderInfo();
       if (ok) {
-        if (!this.running) this.status((this.game.hasApi() ? 'Ready. ' : '') + 'Connected to Infinibrowser. Type any word and press Start.', 's-ok');
+        if (!this.running) this.status((this.game.hasApi() ? 'Ready. ' : '') + 'Connected to Infinibrowser' + (Relay.alive() ? ' (through its tab, keep it open)' : '') + '. Type any word and press Start.', 's-ok');
         return true;
       }
       const why = this.ib.problem() || "Can't reach infinibrowser.wiki.";
       this.status(why, 's-err');
-      this.log('fail', why);
+      this.log('fail', why + (this.ib.lastError ? ' [' + this.ib.lastError + ']' : ''));
+      if (!quiet && !this.running) this.notice("Can't reach Infinibrowser", why, 's-err', this.relayAction());
       return false;
+    }
+    openRelay() {
+      if (Relay.alive()) { this.status('The Infinibrowser tab is already connected.', 's-ok'); return; }
+      if (!Relay.open()) {
+        this.notice('Pop-up blocked', 'Your browser blocked the Infinibrowser tab. Allow pop-ups for neal.fun (icon in the address bar), then click the button again.', 's-err', this.relayAction());
+        return;
+      }
+      this.notice('Opening Infinibrowser...', 'Waiting for the Infinibrowser tab. If it shows "checking your browser", let it finish. Keep that tab open.', 's-warn');
+      this.status('Waiting for the Infinibrowser tab...', 's-run');
+    }
+    onRelayReady() {
+      this.ib.resetHealth();
+      this.log('plan', 'Connected to Infinibrowser through its tab (keep it open)');
+      if (!this.running) this.notice('Connected', 'Connected to Infinibrowser through its tab. Keep that tab open and press Start.', 's-ok');
+      this.status('Connected to Infinibrowser through its tab. Press Start.', 's-ok');
+      this.renderInfo();
+    }
+    async testConnection() {
+      if (this._testing) return;
+      this._testing = true;
+      this.status('Testing the connection to Infinibrowser...', 's-run');
+      const url = C.ib.base + '/item?id=Water';
+      const describe = (r) => 'HTTP ' + r.status + (looksLikeChallenge(r) ? ' ("checking your browser" page)' : (r.status === 200 ? ' OK' : ''));
+      const lines = [];
+      try {
+        if (Relay.alive()) {
+          try { lines.push('Infinibrowser tab: ' + describe(await Relay.get(url, 10000))); } catch (e) { lines.push('Infinibrowser tab: ' + e.message); }
+        } else lines.push('Infinibrowser tab: not open');
+        if (GMX) {
+          try { lines.push('Userscript manager: ' + describe(await gmGet(url, 10000))); } catch (e) { lines.push('Userscript manager: ' + e.message); }
+        } else lines.push('Userscript manager: not available (is the script installed in Tampermonkey or Violentmonkey?)');
+        try { lines.push('Direct: ' + describe(await fetchGet(url, 10000))); } catch (e) { lines.push('Direct: ' + e.message); }
+        lines.push('Game: ' + (this.game.ic() ? 'connected' : (this.game.hasApi() ? 'connected (older version)' : 'not found')));
+        lines.push('Script v' + VERSION);
+        for (const l of lines) this.log('diag', l);
+        const ok = await this.checkConnection(true);
+        this.notice('Connection test', lines.join('  \u2022  '), ok ? 's-ok' : 's-warn', ok ? null : this.relayAction());
+      } finally {
+        this._testing = false;
+      }
+      return lines;
     }
 
     /* ---------- settings ---------- */
@@ -2298,7 +2509,7 @@
       this.syncButtons();
       return this.token;
     }
-    _end(token, msg, cls) {
+    _end(token, msg, cls, action) {
       if (token !== this.token) return;
       this.running = false;
       this.paused = false;
@@ -2306,7 +2517,7 @@
       this.syncButtons();
       this.mem.flush();
       this.ib.save();
-      this.finishNow(msg, cls);
+      this.finishNow(msg, cls, action);
       if (msg) this.status(msg, cls);
       this.renderStats();
     }
@@ -2433,11 +2644,12 @@
     async runTargets() {
       const token = this._begin('targets');
       const failed = [];
+      const failedWhy = [];
       let made = 0;
       try {
         if (this.ib.problem()) {
           this.status('Checking the connection to Infinibrowser...', 's-run');
-          if (!(await this.checkConnection())) this.log('fail', 'Continuing with saved recipes and items you already have.');
+          if (!(await this.checkConnection(true))) this.log('fail', 'Continuing with saved recipes and items you already have.');
           await this.checkpoint(token);
         }
         for (;;) {
@@ -2462,12 +2674,14 @@
           } else {
             failed.push(t);
             const why = (r.ctx.notes || []).join('; ');
+            failedWhy.push(this.ib.problem() || (r.ctx.notes || [])[0] || '');
             this.log('fail', 'Could not make ' + t + (why ? ': ' + why : '') + (this.opt.relentless ? '' : ' (turn on "Never give up" to search deeper)'));
           }
         }
-        const msg = made ? 'Done! Made ' + made + ' word' + (made > 1 ? 's' : '') + (failed.length ? '. Could not make: ' + failed.join(', ') : '.') :
-          (failed.length ? 'Could not make: ' + failed.join(', ') : 'Nothing left to make.');
-        this._end(token, msg, failed.length ? 's-warn' : 's-ok');
+        const reason = failedWhy.filter(Boolean)[0];
+        const msg = (made ? 'Made ' + made + ' word' + (made > 1 ? 's' : '') + '. ' : '') +
+          (failed.length ? 'Could not make ' + failed.join(', ') + (reason ? ': ' + reason : '.') : (made ? '' : 'Nothing left to make.'));
+        this._end(token, msg.trim(), failed.length ? 's-warn' : 's-ok', this.ib.problem() ? this.relayAction() : null);
       } catch (e) {
         if (e && e.cancelled) return;
         console.error('[WordForge]', e);
@@ -2832,15 +3046,30 @@
     }
     showNow(target) {
       this.$('#ic-now').classList.remove('done-ok', 'done-bad');
+      this._setAction(null);
       this._nowState = { target, strategy: '', msg: 'Starting...', progress: 0, round: 1, level: '', crafts: 0, started: now() };
       this.$('#ic-now').classList.add('show');
       this._renderNow();
     }
-    hideNow() { this.$('#ic-now').classList.remove('show'); this.$('#ic-now').classList.remove('done-ok', 'done-bad'); this._nowState = null; }
+    hideNow() { this.$('#ic-now').classList.remove('show'); this.$('#ic-now').classList.remove('done-ok', 'done-bad'); this._setAction(null); this._nowState = null; }
+    _setAction(action) {
+      const btn = this.$('#ic-now-action');
+      if (!action) { btn.style.display = 'none'; btn.onclick = null; return; }
+      btn.textContent = action.label;
+      btn.onclick = action.fn;
+      btn.style.display = 'block';
+    }
+    relayAction() { return { label: 'Open Infinibrowser tab', fn: () => this.openRelay() }; }
+    // Show a message in the card even when no run is going (connection problems, tests).
+    notice(title, msg, cls, action) {
+      this.showNow(title);
+      this.finishNow(msg, cls, action);
+    }
     // Leave the card up with how the run ended (and why), until the next run starts.
-    finishNow(msg, cls) {
+    finishNow(msg, cls, action) {
       const card = this.$('#ic-now');
       if (!msg || !this._nowState) { this.hideNow(); return; }
+      this._setAction(action || null);
       if (this._nowTimer) { clearTimeout(this._nowTimer); this._nowTimer = null; }
       const bad = cls === 's-err' || cls === 's-warn';
       card.classList.remove('done-ok', 'done-bad');
@@ -2890,7 +3119,7 @@
       const el = this.$('#ic-info');
       if (!el) return;
       const ib = this.ib.problem() ? (this.ib.challengeAt ? 'needs a browser check' : 'unreachable')
-        : (this.ib.lastOkAt ? 'connected' : 'not checked yet') + (GMX ? ' (via userscript manager)' : ' (direct)');
+        : (this.ib.lastOkAt ? 'connected' : 'not checked yet') + (Relay.alive() ? ' (through its tab)' : GMX ? ' (via userscript manager)' : ' (direct)');
       const game = this.game.ic() ? 'connected' : (this.game.hasApi() ? 'connected (older version)' : 'not found yet');
       el.textContent = 'Game: ' + game + ' \u00b7 Infinibrowser: ' + ib + ', ' + this.ib.requests + ' requests' +
         (this.ib.rateLimited ? ', ' + this.ib.rateLimited + ' rate-limited' : '') +
@@ -2954,6 +3183,7 @@
         '<div class="ic-now-meta"><span class="ic-now-strategy" id="ic-now-strategy"></span><span id="ic-now-round"></span></div>',
         '<div class="ic-bar"><div id="ic-now-bar"></div></div>',
         '<div class="ic-now-msg" id="ic-now-msg"></div>',
+        '<button class="ic-btn ic-btn-warn" id="ic-now-action" style="display:none;margin-top:2px;"></button>',
         '</div>',
         '<div class="ic-stats">',
         '<div class="ic-stat green"><div class="ic-stat-val" id="ic-s-new">0</div><div class="ic-stat-label">New Words</div></div>',
@@ -2997,6 +3227,8 @@
         '<button class="ic-btn ic-btn-ghost" id="ic-import">Import</button></div>',
         '<div class="ic-btn-row"><button class="ic-btn ic-btn-ghost" id="ic-relearn" title="Re-survey Infinibrowser for text tools">Re-learn Tools</button>',
         '<button class="ic-btn ic-btn-warn" id="ic-clear">Clear Learned</button></div>',
+        '<div class="ic-btn-row"><button class="ic-btn ic-btn-ghost" id="ic-test-conn" title="Check every way of reaching Infinibrowser and show the results">Test Connection</button>',
+        '<button class="ic-btn ic-btn-ghost" id="ic-open-relay" title="Open infinibrowser.wiki in a tab the script can fetch recipes through">Open Infinibrowser Tab</button></div>',
         '<div class="ic-status" id="ic-save-info" style="padding:5px;font-size:10px;">Save: unknown</div>',
         '<button class="ic-btn ic-btn-ghost" id="ic-rebind-save">Re-scan Save</button>',
         '<div class="ic-section-title" style="margin-top:4px;">Random exploring (optional)</div>',
@@ -3037,6 +3269,8 @@
       $('#ic-clear').onclick = () => this.clearLearned();
       $('#ic-rebind-save').onclick = () => this.rescanSave();
       $('#ic-explore').onclick = () => this.startExplore();
+      $('#ic-test-conn').onclick = () => this.testConnection();
+      $('#ic-open-relay').onclick = () => this.openRelay();
       $('#ic-poke-load').onclick = () => this.ensurePokedexList(true);
       $('#ic-poke-run').onclick = () => this.runPokedex(false);
       $('#ic-poke-stop').onclick = () => { if (this.mode === 'pokedex') this.stop(); else this.pokeStatus('National Dex idle'); };
