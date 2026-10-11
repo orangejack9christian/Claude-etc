@@ -72,9 +72,14 @@ def main(run, out):
     log = load_log(os.path.join(run, "train.csv"))
     meta = json.load(open(os.path.join(run, "net_meta.json")))
 
+    # Games recorded by a run that was later abandoned (e.g. a reverted experiment).
+    sup_path = os.path.join(run, "superseded.txt")
+    superseded = {int(x) for x in open(sup_path).read().split()} if os.path.exists(sup_path) else set()
     by_trained = {}
     for line in open(os.path.join(run, "milestones.jsonl")):
         g = json.loads(line)
+        if g["trained"] in superseded:
+            continue
         by_trained.setdefault(g["trained"], []).append(g)
     final = os.environ.get("FINAL") == "1"
     replays = []

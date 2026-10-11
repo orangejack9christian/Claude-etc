@@ -773,9 +773,10 @@ footer { color: var(--muted); font-size: 13px; }
     const tx = opts.linear ? (v) => v : Math.log10;
     const x0 = tx(xs[0]), x1 = tx(xs[xs.length - 1]);
     const X = (v) => M.l + ((tx(v) - x0) / Math.max(1e-9, x1 - x0)) * (W - M.l - M.r);
-    const Y = (v) => H - M.b - (v / opts.yMax) * (H - M.t - M.b);
+    const y0 = opts.yMin || 0;
+    const Y = (v) => H - M.b - ((v - y0) / (opts.yMax - y0)) * (H - M.t - M.b);
     for (const t of opts.yTicks) {
-      el('line', { x1: M.l, x2: W - M.r, y1: Y(t), y2: Y(t), class: t === 0 ? 'ax' : 'gl' });
+      el('line', { x1: M.l, x2: W - M.r, y1: Y(t), y2: Y(t), class: t === y0 ? 'ax' : 'gl' });
       el('text', { x: M.l - 8, y: Y(t) + 3.5, 'text-anchor': 'end' }).textContent = opts.yFmt(t);
     }
     const xticks = [];
@@ -795,12 +796,12 @@ footer { color: var(--muted); font-size: 13px; }
       if (ev.games < xs[0] || ev.games > xs[xs.length - 1]) return;
       const ex = X(ev.games);
       el('line', { x1: ex, x2: ex, y1: M.t, y2: H - M.b, class: 'evt' });
-      el('text', { x: ex - 4, y: M.t + 10 + i * 13, 'text-anchor': 'end', class: 'evtlbl' }).textContent = ev.label;
+      if (opts.eventLabels !== false) el('text', { x: ex - 4, y: M.t + 10 + i * 13, 'text-anchor': 'end', class: 'evtlbl' }).textContent = ev.label;
     });
     const marker = el('line', { y1: M.t, y2: H - M.b, class: 'marker', visibility: 'hidden' });
     for (const s of opts.series) {
       const pts = xs.map((x, i) => `${X(x).toFixed(1)},${Y(s.y[i]).toFixed(1)}`);
-      if (opts.area) el('path', { d: `M${X(xs[0])},${Y(0)}L${pts.join('L')}L${X(xs[xs.length - 1])},${Y(0)}Z`, class: 'area', fill: s.color });
+      if (opts.area) el('path', { d: `M${X(xs[0])},${Y(y0)}L${pts.join('L')}L${X(xs[xs.length - 1])},${Y(y0)}Z`, class: 'area', fill: s.color });
       el('path', { d: 'M' + pts.join('L'), class: 'ln', stroke: s.color });
     }
     const ends = opts.series.map((s) => ({ s, y: Y(s.y[s.y.length - 1]) })).sort((a, b) => a.y - b.y);
@@ -853,10 +854,14 @@ footer { color: var(--muted); font-size: 13px; }
     const D = DATA.drills || [];
     if (D.length >= 2) {
       $('c-drills').hidden = false;
-      const dMax = niceMax(Math.max(...D.map((r) => r.gain)) * 1.1);
+      // Zoomed axis: the change is a few thousand points on top of ~100K.
+      const g = D.map((r) => r.gain), step = 5000;
+      const dMin = Math.floor((Math.min(...g) - step) / step) * step, dMax = Math.ceil((Math.max(...g) + step) / step) * step;
+      const ticks = [];
+      for (let v = dMin; v <= dMax; v += Math.max(step, Math.ceil((dMax - dMin) / 4 / step) * step)) ticks.push(v);
       charts.push(lineChart($('c-drills'), {
-        aria: 'Points added in endgame drills over training', x: D.map((r) => r.games), yMax: dMax, linear: true, W: 1060, H: 230,
-        yTicks: [0, 0.25, 0.5, 0.75, 1].map((f) => f * dMax), yFmt: compact, tipFmt: (v) => '+' + fmt(v), area: true,
+        aria: 'Points added in endgame drills over training', x: D.map((r) => r.games), yMin: dMin, yMax: dMax, linear: true, W: 1060, H: 230,
+        yTicks: ticks, yFmt: compact, tipFmt: (v) => '+' + fmt(v),
         series: [{ name: 'Points added', color: 'var(--l16384)', y: D.map((r) => r.gain), endLabel: '+' + compact(D[D.length - 1].gain) }],
       }));
     }
@@ -872,7 +877,7 @@ footer { color: var(--muted); font-size: 13px; }
     const T = [['2048', 'r2048', '--l2048'], ['4096', 'r4096', '--l4096'], ['8192', 'r8192', '--l8192'], ['16384', 'r16384', '--l16384'], ['32768', 'r32768', '--l32768']];
     const used = T.filter((t) => L.some((r) => r[t[1]] > 0));
     charts.push(lineChart($('c-tiles'), {
-      aria: 'Share of games reaching 2048 and larger tiles', x, yMax: 1, events: DATA.events,
+      aria: 'Share of games reaching 2048 and larger tiles', x, yMax: 1, events: DATA.events, eventLabels: false,
       yTicks: [0, 0.25, 0.5, 0.75, 1], yFmt: (v) => Math.round(v * 100) + '%', tipFmt: (v) => (v * 100).toFixed(1) + '%',
       series: used.map((t) => ({ name: t[0], color: `var(${t[2]})`, y: L.map((r) => r[t[1]]), endLabel: `${t[0]} ${Math.round(L[L.length - 1][t[1]] * 100)}%` })),
     }));
@@ -903,7 +908,8 @@ footer { color: var(--muted); font-size: 13px; }
       ['Training moves', compact(m.moves)],
       ['Training time', m.hours.toFixed(1) + ' h on 4 CPU cores'],
       ['Learning rule', 'TD(0) + temporal coherence'],
-      ['Endgame practice', DATA.events.length ? `from game ${compact(DATA.events[0].games)}: 3 of 4 games restart mid-game` : 'none'],
+      ['Endgame practice', DATA.events.length ? `restarts mid-game from ${compact(DATA.events[0].games)} games` : 'none'],
+      ...(DATA.events.length > 2 ? [['Endgame drills', `from ${compact(DATA.events[2].games)} games: half start at a saved 16384`]] : []),
       ['Search speed in your browser', '<span id="f-nps">measuring…</span>'],
     ];
     $('facts').innerHTML = facts.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('');
@@ -919,7 +925,7 @@ footer { color: var(--muted); font-size: 13px; }
       $('endgame-panel').hidden = false;
       $('eg-n').textContent = fmt(eg[0].games);
       $('endgame').innerHTML = '<thead><tr><th>Search</th><th>Positions</th><th>Avg points added</th><th>Made 32768</th><th>Time / move</th></tr></thead><tbody>' +
-        eg.map((e) => `<tr><td>${searchName(e)}</td><td>${fmt(e.games)}</td><td class="hl">+${fmt(e.avg)}</td><td>${pct(e.r32768)}</td><td>${e.ms_per_move < 10 ? e.ms_per_move.toFixed(1) : Math.round(e.ms_per_move)} ms</td></tr>`).join('') + '</tbody>';
+        eg.map((e) => `<tr><td>${searchName(e)}</td><td>${fmt(e.games)}</td><td class="hl">+${fmt(e.avg)}</td><td>${pct(e.r32768)}</td><td>${e.ms_per_move < 0.1 ? '<0.1' : e.ms_per_move < 10 ? e.ms_per_move.toFixed(1) : Math.round(e.ms_per_move)} ms</td></tr>`).join('') + '</tbody>';
     }
     $('intro').textContent = `A neural network that taught itself 2048 by playing ${compact(m.games)} games, paired with a search engine that looks many moves ahead, the way a chess engine does. Both run right here in your browser.`;
   }
