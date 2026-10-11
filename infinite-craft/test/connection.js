@@ -122,17 +122,14 @@ const waitStatus = (page, re, ms) => page.waitForFunction((src) => new RegExp(sr
   check(await waitStatus(g.page, /blocked the request|can't reach/), 'load shows that Infinibrowser is blocked', await status(g.page));
   await g.page.fill('#ic-target', 'Dragon');
   await g.page.click('#ic-start');
-  await g.page.waitForFunction(() => !window._icAutoInstance.running, null, { timeout: 30000 });
-  const card = await g.page.evaluate(() => ({ shown: document.querySelector('#ic-now').classList.contains('show'), msg: document.querySelector('#ic-now-msg').textContent }));
-  check(card.shown, 'result card stays visible after the run stops');
-  check(/Dragon/.test(card.msg) && /can't reach infinibrowser/i.test(card.msg), 'the card itself says why the word failed', card.msg);
-  check(await g.page.isVisible('#ic-now-action') && /Open Infinibrowser tab/.test(await g.page.textContent('#ic-now-action')), 'the card offers the fix button');
+  const shown = await g.page.waitForFunction(() => /can't reach infinibrowser/i.test(document.querySelector('#ic-now-msg').textContent), null, { timeout: 60000 }).then(() => true, () => false);
+  check(shown, 'the card itself says why the word is stuck', await g.page.textContent('#ic-now-msg'));
+  check(await g.page.evaluate(() => window._icAutoInstance.running), 'it keeps going instead of giving up');
+  check(await g.page.isVisible('#ic-now-action') && /Open Infinibrowser tab/.test(await g.page.textContent('#ic-now-action')), 'the card offers the fix button while it waits');
   console.log('Connection comes back:');
   g.state.mode = 'ok';
-  await g.page.waitForTimeout(1600);
-  await g.page.click('#ic-start');
-  await g.page.waitForFunction(() => !window._icAutoInstance.running, null, { timeout: 60000 });
-  check(await g.page.evaluate(() => !!window._icAutoInstance.game.find('Dragon', 'case')), 'Start re-checks the connection and makes the word', await status(g.page));
+  await g.page.waitForFunction(() => !window._icAutoInstance.running, null, { timeout: 120000 }).catch(() => {});
+  check(await g.page.evaluate(() => !!window._icAutoInstance.game.find('Dragon', 'case')), 'the same run picks the connection back up and makes the word', await status(g.page));
   check(g.errors.length === 0, 'no page errors', g.errors.join(' | '));
   await g.context.close();
 

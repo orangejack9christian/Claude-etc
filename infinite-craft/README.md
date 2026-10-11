@@ -31,17 +31,23 @@ are picked up automatically.
 
 Each word goes through these steps in order, and every craft it makes comes from a known
 recipe or a known text tool. If a round fails it searches deeper (quick, then deep, then
-thorough). When every known route is used up, it stops and tells you why in the log (for
-example `no known tool adds "ü"`) instead of guessing.
+thorough). With **Never give up** on (the default), every later round searches wider: deeper
+recipes, more letter tools, and bigger Infinibrowser surveys for tools that add a missing
+character. When there's nothing new to try, it waits and tries again instead of stopping,
+with the card saying what it's stuck on (for example `no known tool adds " "`). Every few
+waits it re-checks Infinibrowser for new uploads. It never guesses at random.
 
 1. **Look it up on Infinibrowser.** It checks every spelling that counts as your word
    (`Fire Truck`, `fire truck`, `FIRE TRUCK`, ...). If someone has already uploaded it, it
    crafts the cheapest recipe it finds. If a step doesn't work in your game or an ingredient
    is missing, it reroutes through that item's other uploaded recipes. If remembered history
    disagrees with Infinibrowser, it re-crafts that pair once to find out which is right.
-2. **Phrases from words that exist.** `Fire Truck Monster` = `Fire Truck` + `Monster`, but
-   only when both parts are already in your inventory or on Infinibrowser, and never when the
-   pair is known to make something else.
+2. **Phrases from words.** `Mr. Eremey Jeremy` = `Mr. Eremey` + `Jeremy`. First it only uses
+   parts that already exist (in your inventory or on Infinibrowser). From round 2 it makes
+   the missing parts first (`Mr. Eremey` = `Mr.` + `Eremey`, with `Eremey` built letter by
+   letter), then combines them. A pair always gives the same result, so later rounds try
+   other spellings of the parts (`ender` + `Dragon`, ...), each a fresh chance. A pair
+   known to make something else is never crafted again.
 3. **Build new words letter by letter.** For words nobody has made yet. This is the community
    technique: start from the longest quoted prefix Infinibrowser already knows (`"zor"`),
    append letters or chunks (`'b'`, `.l`, `“ian”`), then unquote the result
@@ -80,6 +86,13 @@ exist.
 
 ## Changelog
 
+- **6.4.0**: Never gives up. With "Never give up" on, rounds continue indefinitely and
+  widen each time. When stuck, it waits and retries (re-checking Infinibrowser for new
+  uploads) and the card shows the most specific blocker, not "not on Infinibrowser yet".
+  Phrases now make their missing parts and try other spellings of the parts. Spaces and
+  punctuation get their own Infinibrowser survey. If Infinibrowser drops mid-run, the run
+  keeps going with the "Open Infinibrowser tab" button in the card and continues by itself
+  once it's back.
 - **6.3.0**: When a word fails, the card now says why (not just "Could not make") and offers
   the fix. New **Open Infinibrowser tab** relay: the script also runs on infinibrowser.wiki and
   fetches recipes for the game tab. It talks over postMessage, or through shared userscript

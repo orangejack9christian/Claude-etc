@@ -70,6 +70,8 @@
       staleCount: 8,        // Infinibrowser recipes the game no longer agrees with
       hiddenRate: 0.1,      // share of words the community never recorded
       rateLimitEvery: 30,   // every Nth Infinibrowser request answers 429
+      spaceTool: true,      // false: no tool appends a space, so phrases must be combined
+      extraWords: [],       // extra words in the community word tree, e.g. ['Mr.', 'Jeremy']
       names: {}
     }, cfg || {});
     const N = Object.assign({
@@ -87,15 +89,16 @@
     const tools = new Set();
 
     // 1) Ordinary word tree grown from the four base elements.
-    for (let i = 0; i < VOCAB.length; i++) {
+    const vocab = VOCAB.concat((cfg.extraWords || []).filter((w) => VOCAB.indexOf(w) < 0));
+    for (let i = 0; i < vocab.length; i++) {
       let a, b, tries = 0;
       do {
         a = words[Math.floor(rnd(S + 'a' + i + ':' + tries) * words.length)];
         b = words[Math.floor(rnd(S + 'b' + i + ':' + tries) * words.length)];
         tries++;
       } while (table.has(key(a, b)) && tries < 80);
-      table.set(key(a, b), VOCAB[i]);
-      words.push(VOCAB[i]);
+      table.set(key(a, b), vocab[i]);
+      words.push(vocab[i]);
     }
 
     // 2) Text tools, each made from a fixed pair of ordinary words.
@@ -109,7 +112,8 @@
       if (cfg.curlyLetters !== false) toolList.push('“' + c + '”');
     }
     for (const d of '0123456789') toolList.push('.' + d);
-    toolList.push('“ ”', '\'-\'', '\'_\'', '.\'');
+    if (cfg.spaceTool !== false) toolList.push('“ ”');
+    toolList.push('\'-\'', '\'_\'', '.\'');
     for (const chunk of ['er', 'ing', 'ian', 'ness', 'land', 'ly', 'tion', 'saurus', 'xian']) toolList.push('“' + chunk + '”');
     for (const k of Object.keys(N)) toolList.push(N[k]);
     let ti = 0;
@@ -161,6 +165,7 @@
       if (pa.w === 'plain' && pb.w === 'plain' && !tools.has(a) && !tools.has(b) && a !== b) {
         if (rnd(S + 'ph' + k) < cfg.phraseRate) {
           const [x, y] = a <= b ? [a, b] : [b, a];
+          if (/\.$/.test(x) !== /\.$/.test(y)) return /\.$/.test(x) ? x + ' ' + y : y + ' ' + x;
           return rnd(S + 'po' + k) < 0.5 ? x + ' ' + y : y + ' ' + x;
         }
       }

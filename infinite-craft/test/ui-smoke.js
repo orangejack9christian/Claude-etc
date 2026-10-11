@@ -139,6 +139,16 @@ async function check(cond, label) {
   await check(await app(() => !!window._icAutoInstance.game.find('Zorblax', false)), 'Pokedex run made #4 (Zorblax)');
   await check(/complete/.test(await page.textContent('#ic-poke-status')), 'Pokedex queue completes');
 
+  // "Never give up": a word with a letter no tool can add keeps going (waiting and searching
+  // wider) instead of stopping, and says what it's stuck on.
+  await page.fill('#ic-target', 'na\u00efve');
+  await page.click('#ic-start');
+  const stillGoing = await page.waitForFunction(() => /Not giving up/.test(document.querySelector('#ic-now-msg').textContent), null, { timeout: 90000 }).then(() => true, () => false);
+  await check(stillGoing && await app(() => window._icAutoInstance.running), 'never gives up on a hard word (keeps running and says why)');
+  await check(/\u00ef/.test(await page.textContent('#ic-now-msg')), 'the card names the letter it is stuck on');
+  await page.click('#ic-stop');
+  await page.fill('#ic-target', '');
+
   // Start with an empty box never combines anything at random.
   await page.fill('#ic-target', '');
   const before = await app(() => window._icAutoInstance.stats.crafts);

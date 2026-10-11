@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Infinite Craft - Word Forge Pro (Auto Combiner v6)
 // @namespace    https://neal.fun/infinite-craft/
-// @version      6.3.0
+// @version      6.4.0
 // @description  Type any word and it gets crafted: looks it up on Infinibrowser and crafts the uploaded recipe (self-healing), or builds brand-new words letter by letter with text tools learned from Infinibrowser. No random combining. Keeps the National Pokedex queue, history and save tools.
 // @match        https://neal.fun/infinite-craft*
 // @match        https://infinibrowser.wiki/*
@@ -92,7 +92,7 @@
   /* ============================================================
    * Config
    * ============================================================ */
-  const VERSION = '6.3.0';
+  const VERSION = '6.4.0';
 
   // Small settings stay in localStorage (same keys as v5.x so settings carry over).
   // Big learned data (tried pairs, pair results, Infinibrowser cache) lives in IndexedDB
@@ -175,12 +175,12 @@
     forge: {
       // Each failed round escalates to the next level (deeper recursion, more branches).
       levels: [
-        { name: 'quick', depth: 3, branches: 4, splits: 2, seeds: 3, cands: 6, appendCrafts: 80 },
-        { name: 'deep', depth: 5, branches: 8, splits: 3, seeds: 5, cands: 10, appendCrafts: 160 },
-        { name: 'thorough', depth: 7, branches: 16, splits: 4, seeds: 8, cands: 16, appendCrafts: 320 }
+        { name: 'quick', depth: 3, branches: 4, splits: 2, seeds: 3, cands: 6, appendCrafts: 80, mine: 0 },
+        { name: 'deep', depth: 5, branches: 8, splits: 3, seeds: 5, cands: 10, appendCrafts: 160, mine: 1 },
+        { name: 'thorough', depth: 7, branches: 16, splits: 4, seeds: 8, cands: 16, appendCrafts: 320, mine: 2 }
       ],
       giveUpRounds: 2,
-      extraRounds: 2,
+      maxNest: 2,
       opsMaxAge: 7 * 864e5
     },
   };
@@ -851,6 +851,8 @@
       return unknown ? undefined : null;
     }
     clear() { this.mem.clear(); return KV.del('ib'); }
+    // Drop cached "not on Infinibrowser" answers so newly uploaded items and recipes are seen.
+    forgetMisses() { for (const [k, e] of Array.from(this.mem)) if (e.v == null) this.mem.delete(k); }
   }
 
   /* ============================================================
@@ -1447,12 +1449,12 @@
       const idx = this._appIndex || this._buildAppIndex();
       return (idx.get(String(ch).toLowerCase()) || []).length > 0;
     }
-    async _mineIds(ids, kind, onProgress) {
+    async _mineIds(ids, kind, onProgress, pages) {
       let done = 0;
       for (const id of ids) {
-        const tag = kind + ':' + id;
+        const tag = kind + ':' + id + (pages ? ':' + pages : '');
         if (this.mined.has(tag)) { done++; continue; }
-        const data = kind === 'uses' ? await this.ib.uses(id, 2) : await this.ib.recipes(id, 1);
+        const data = kind === 'uses' ? await this.ib.uses(id, pages || 2) : await this.ib.recipes(id, pages || 1);
         if (data === undefined) return false;   // Infinibrowser unreachable; try later
         if (data && data.list) {
           if (kind === 'uses') this.learnFromUses(id, data.list);
@@ -1466,7 +1468,15 @@
       return true;
     }
     // One-time (weekly) survey of how text tools behave on common quoted words.
-    async ensureMined(onProgress) {
+    async ensureMined(onProgress, level) {
+      level = level || 0;
+      if (level >= 2 && (this.minedLevel || 0) < 2) {
+        // Wider survey for later rounds: more words, more pages.
+        const more = ['star', 'moon', 'king', 'word', 'name', 'sun', 'life', 'time', 'mr', 'the'];
+        const ids = [];
+        for (const w of more) ids.push(Text.wrap(w, 'dq'), Text.wrap(Text.capFirst(w), 'dq'), Text.wrap(w, 'cq'));
+        if (await this._mineIds(ids, 'uses', onProgress && ((d) => onProgress(d, ids.length)), 3)) { this.minedLevel = 2; this._save(); }
+      }
       if (this.minedAt && now() - this.minedAt < C.forge.opsMaxAge && this.obs.size) return true;
       const words = ['fire', 'water', 'hello', 'cat', 'tree', 'apple', 'dog', 'abc'];
       const useIds = [], recipeIds = [];
@@ -1482,15 +1492,36 @@
       return ok1 && ok2;
     }
     // Targeted survey: who appends this character? Look at recipes of short quoted strings ending in it.
-    async mineChar(ch) {
+    // Each level surveys more: more leading letters, capitals, curly quotes, then more pages.
+    async mineChar(ch, level) {
+      level = level || 0;
       const lc = ch.toLowerCase(), uc = ch.toUpperCase();
+      let leads = ['a', 'e', 'o', 'i', lc];
+      if (level >= 1) leads = leads.concat('bcdfghjklmnpqrstuvwxyz'.split(''));
+      if (level >= 2) leads = leads.concat('AEIOUMSTR'.split(''), '0123'.split(''), [' ']);
       const ids = [];
-      for (const lead of ['a', 'e', 'o', 'i', lc]) {
+      for (const lead of leads) {
         ids.push(Text.wrap(lead + lc, 'dq'));
         if (uc !== lc) ids.push(Text.wrap(lead + uc, 'dq'));
+        if (level >= 2) ids.push(Text.wrap(lead + lc, 'cq'));
       }
       ids.push(Text.wrap('a' + lc, 'cq'), Text.wrap('A' + lc, 'dq'));
-      await this._mineIds(Array.from(new Set(ids)), 'recipes');
+      if (level >= 2) for (const w of ['sq', 'dot', 'cq']) ids.push(Text.wrap(ch, w));
+      if (/[^\p{L}\p{N}]/u.test(ch)) {
+        // Spaces and punctuation: look at how the community built quoted words ending in it,
+        // and quoted phrases that contain it.
+        const words = ['hello', 'the', 'mr', 'a', 'my', 'new', 'good', 'big', 'fire', 'ice', 'dr', 'st', 'i', 'you', 'what'];
+        for (const w of words.slice(0, level >= 1 ? words.length : 6)) {
+          for (const form of [w, Text.capFirst(w)]) ids.push(Text.wrap(form + ch, 'dq'), Text.wrap(form + ch, 'cq'));
+        }
+        if (ch === ' ') {
+          for (const p of ['hello world', 'the end', 'ice cream', 'new york', 'good morning', 'mr bean', 'mr. bean', 'big bang', 'fire truck', 'game over']) {
+            ids.push(Text.wrap(p, 'dq'), Text.wrap(Text.title(p), 'dq'), Text.wrap(p, 'cq'));
+          }
+        }
+      }
+      await this._mineIds(Array.from(new Set(ids)), 'recipes', null, level >= 3 ? 2 : 0);
+      if (level >= 2) await this._mineIds([Text.wrap(ch, 'sq'), Text.wrap(ch, 'cq'), Text.wrap(lc, 'dq')], 'uses', null, 2);
       return this.hasAppendersFor(ch);
     }
   }
@@ -1510,7 +1541,19 @@
     _check(ctx) { return this.app.checkpoint(ctx.token); }
     _say(ctx, msg, progress) { this.app.forgeStatus(ctx, msg, progress); }
     _done(ctx) { return this.game.find(ctx.target, ctx.match); }
-    _note(ctx, msg) { if (ctx.notes && ctx.notes.indexOf(msg) < 0) ctx.notes.push(msg); }
+    // Notes explain why a word isn't made yet; prio says how specific a note is (the most
+    // specific one is shown to the player).
+    _note(ctx, msg, prio) {
+      if (!ctx.notes) return;
+      if (ctx.notes.indexOf(msg) < 0) ctx.notes.push(msg);
+      ctx.noteP = ctx.noteP || {};
+      ctx.noteP[msg] = Math.max(ctx.noteP[msg] || 0, prio || 5);
+    }
+    reason(ctx) {
+      let best = '', bp = -1;
+      for (const m of ctx.notes || []) { const p = (ctx.noteP && ctx.noteP[m]) || 5; if (p >= bp) { best = m; bp = p; } }
+      return best;
+    }
     _plan(ctx, msg) { if (ctx.nest === 0) this.app.log('plan', msg); }
 
     // ---------- crafting primitive ----------
@@ -1646,7 +1689,7 @@
       const { found, unknown } = await this._wikiMatches(ctx);
       if (!found.length) {
         const msg = unknown ? (this.ib.problem() || 'Infinibrowser could not be reached') : '"' + ctx.target + '" is not on Infinibrowser yet';
-        this._note(ctx, msg);
+        this._note(ctx, msg, unknown ? 9 : 1);
         if (!ctx.lookupLogged) { ctx.lookupLogged = true; this._plan(ctx, msg + (unknown ? '' : ', so it will be built letter by letter')); }
         return false;
       }
@@ -1660,45 +1703,98 @@
         await this.ensure(f.id, ctx, ctx.level.depth, null);
         if (this._done(ctx)) return true;
       }
-      this._note(ctx, 'the Infinibrowser recipe for ' + found[0].id + " didn't fully work in this game");
+      this._note(ctx, 'the Infinibrowser recipe for ' + found[0].id + " didn't fully work in this game", 7);
       return false;
     }
 
-    // ---------- Strategy 2: phrases made of words that already exist ----------
-    // "Fire Truck Monster" = "Fire Truck" + "Monster". Only tried when both parts are already in
-    // your inventory or on Infinibrowser, and never when the pair is known to make something else.
-    async _knownPart(part) {
-      const owned = this.game.find(part, 'case');
-      if (owned) return owned;
-      for (const v of Text.variants(part, 'case')) if (await this.ib.exists(v)) return v;
-      return null;
+    // ---------- Strategy 2: phrases from words ----------
+    // "Mr. Eremey Jeremy" = "Mr. Eremey" + "Jeremy". First only with parts that already exist
+    // (in your inventory or on Infinibrowser); with build=true, missing parts are made first
+    // (looked up, phrased or built letter by letter), then combined. A pair already known to
+    // make something else is never crafted again.
+    // exact: make this precise spelling (for extra pairings), not just any capitalization.
+    async _buildPart(part, ctx, exact) {
+      this._say(ctx, 'Making the part "' + part + '" first');
+      const sub = await this.obtain(part, { match: exact ? 'exact' : 'case', token: ctx.token, nest: ctx.nest + 1, level: ctx.levelIndex, parent: ctx });
+      ctx.crafts += sub.ctx.crafts;
+      if (!sub.ok) this._note(ctx, "couldn't make the part \"" + part + '"' + (this.reason(sub.ctx) ? ' (' + this.reason(sub.ctx) + ')' : ''), 4);
+      return sub.ok ? sub.name : null;
     }
-    async viaCompound(ctx) {
+    // Spellings of a part that exist (owned or on Infinibrowser), best first. Each spelling is a
+    // different item in the game, so each pairing is a fresh chance.
+    async _partSpellings(part) {
+      const out = [];
+      const owned = this.game.find(part, 'case');
+      if (owned) out.push(owned);
+      for (const v of Text.variants(part, 'case')) {
+        if (out.indexOf(v) >= 0) continue;
+        if (this.game.has(v, true) || (await this.ib.exists(v))) out.push(v);
+      }
+      return out;
+    }
+    async viaCompound(ctx, build) {
       const tokens = ctx.target.split(/\s+/);
       if (tokens.length < 2) return false;
-      ctx.strategy = 'Phrase from known words';
+      if (build && ctx.nest >= C.forge.maxNest) return false;
+      ctx.strategy = build ? 'Phrase (making the parts)' : 'Phrase from known words';
       const splits = [];
       for (let k = 1; k < tokens.length; k++) {
-        splits.push({ left: tokens.slice(0, k).join(' '), right: tokens.slice(k).join(' '), score: -Math.abs(tokens.length / 2 - k) });
-      }
-      splits.sort((a, b) => b.score - a.score);
-      for (const sp of splits.slice(0, ctx.level.splits)) {
         await this._check(ctx);
-        const L = await this._knownPart(sp.left);
-        if (!L) continue;
-        const R = await this._knownPart(sp.right);
-        if (!R) continue;
-        const known = this.mem.result(L, R);
-        if (known !== undefined && !Text.same(known, ctx.target, ctx.match)) continue;
-        this._say(ctx, 'Both parts exist: ' + L + ' + ' + R);
-        const l = await this.ensure(L, ctx, ctx.level.depth, null);
-        if (!l) continue;
-        const r = await this.ensure(R, ctx, ctx.level.depth, null);
-        if (!r) continue;
-        await this.craftPair(l, r, ctx, 'phrase');
-        if (this._done(ctx)) { this._plan(ctx, 'Made it by combining ' + l + ' + ' + r); return true; }
+        const left = tokens.slice(0, k).join(' '), right = tokens.slice(k).join(' ');
+        const Ls = await this._partSpellings(left), Rs = await this._partSpellings(right);
+        splits.push({ left, right, Ls, Rs, known: (Ls.length ? 1 : 0) + (Rs.length ? 1 : 0), balance: -Math.abs(tokens.length / 2 - k) });
+      }
+      splits.sort((a, b) => (b.known - a.known) || (b.balance - a.balance));
+      // Pairings allowed this round; later rounds try more spellings.
+      let budget = ctx.level.splits * (build ? 2 : 3);
+      const variantsAllowed = 1 + Math.min(4, ctx.level.mine || 0);
+      for (const sp of splits) {
+        if (budget <= 0) break;
+        if (sp.known < 2 && !build) continue;
+        await this._check(ctx);
+        // Missing parts are made first (once per spelling); later rounds also make
+        // lower-case / Title spellings of them for extra pairings.
+        if (!sp.Ls.length || (build && sp.Ls.length < variantsAllowed && ctx.level.mine >= 2)) {
+          if (!build) continue;
+          for (const form of this._buildForms(sp.left, variantsAllowed)) {
+            if (sp.Ls.some((x) => x === form)) continue;
+            const got = await this._buildPart(form, ctx, sp.Ls.length > 0);
+            if (got && sp.Ls.indexOf(got) < 0) sp.Ls.push(got);
+            if (this._done(ctx)) return true;
+          }
+        }
+        if (!sp.Rs.length || (build && sp.Rs.length < variantsAllowed && ctx.level.mine >= 2)) {
+          if (!build) continue;
+          for (const form of this._buildForms(sp.right, variantsAllowed)) {
+            if (sp.Rs.some((x) => x === form)) continue;
+            const got = await this._buildPart(form, ctx, sp.Rs.length > 0);
+            if (got && sp.Rs.indexOf(got) < 0) sp.Rs.push(got);
+            if (this._done(ctx)) return true;
+          }
+        }
+        for (const L of sp.Ls.slice(0, variantsAllowed)) {
+          for (const R of sp.Rs.slice(0, variantsAllowed)) {
+            if (budget <= 0) break;
+            const known = this.mem.result(L, R);
+            if (known !== undefined && !Text.same(known, ctx.target, ctx.match)) continue;
+            budget--;
+            const l = await this.ensure(L, ctx, ctx.level.depth, null);
+            if (!l) continue;
+            const r = await this.ensure(R, ctx, ctx.level.depth, null);
+            if (!r) continue;
+            if (this._done(ctx)) return true;
+            this._say(ctx, 'Combining ' + l + ' + ' + r);
+            const res = await this.craftPair(l, r, ctx, 'phrase');
+            if (this._done(ctx)) { this._plan(ctx, 'Made it by combining ' + l + ' + ' + r); return true; }
+            this._note(ctx, l + ' + ' + r + ' made ' + (res || 'nothing'), 3);
+          }
+        }
       }
       return false;
+    }
+    _buildForms(part, n) {
+      const forms = [part, Text.title(part.toLowerCase()), part.toLowerCase(), Text.capFirst(part.toLowerCase())];
+      return Array.from(new Set(forms)).slice(0, n);
     }
 
     // ---------- Strategy 3: string building (letter by letter, any text) ----------
@@ -1827,7 +1923,7 @@
       // E) Nothing known for this character yet: mine Infinibrowser for it, then look again.
       if (!out.some((c) => c.adds && Text.startsCI(rest, c.adds))) {
         this._say(ctx, 'Learning how to add "' + ch + '"...');
-        await this.tools.mineChar(ch);
+        await this.tools.mineChar(ch, ctx.level.mine);
         for (const c of this.tools.appenders(rest, cur.w, ctx.exact).slice(0, 10)) add(c.op, c.adds, c.sig, 20 + c.score);
       }
       // Keep the capitalization the user typed whenever a case-exact route exists.
@@ -1891,7 +1987,7 @@
         const rest = goal.slice(cur.core.length);
         this._say(ctx, 'Building ' + cur.text + ' + "' + rest.slice(0, 16) + (rest.length > 16 ? '…' : '') + '"', cur.core.length / goal.length);
         const cands = await this._appendCandidates(cur, rest, goal, ctx);
-        if (!cands.length) this._note(ctx, 'no known tool adds "' + rest[0] + '"');
+        if (!cands.length) this._note(ctx, 'no known tool adds "' + rest[0] + '"', 8);
         for (const c of cands) {
           if (ctx.crafts - startCrafts >= ctx.level.appendCrafts) return null;
           const r = await this._tryTool(c.op, cur.text, ctx);
@@ -2029,7 +2125,7 @@
           }
         }
       }
-      this._note(ctx, 'built ' + st.text + ' but no unquote tool turned it into the plain word');
+      this._note(ctx, 'built ' + st.text + ' but no unquote tool turned it into the plain word', 7);
       return false;
     }
     // Before crafting anything, make sure every letter still to be added has some tool that adds
@@ -2049,8 +2145,8 @@
           if (ok) break;
         }
         if (!ok) {
-          this._say(ctx, 'Looking for a tool that adds "' + ch + '"...');
-          ok = await this.tools.mineChar(ch);
+          this._say(ctx, 'Searching Infinibrowser for a tool that adds "' + ch + '"...');
+          ok = await this.tools.mineChar(ch, ctx.level.mine);
         }
         if (!ok) missing.push(ch);
       }
@@ -2061,17 +2157,17 @@
       const goal = Text.parse(ctx.target).core;
       if (!goal) return false;
       this._say(ctx, 'Learning text tools from Infinibrowser...');
-      await this.tools.ensureMined((d, n) => this._say(ctx, 'Learning text tools from Infinibrowser (' + d + '/' + n + ')', d / n));
+      await this.tools.ensureMined((d, n) => this._say(ctx, 'Learning text tools from Infinibrowser (' + d + '/' + n + ')', d / n), ctx.level.mine);
       const seeds = await this._seeds(goal, ctx);
       if (!seeds.length) {
-        this._note(ctx, 'no quoted starting letter for "' + goal[0] + '" on Infinibrowser');
+        this._note(ctx, 'no quoted starting letter for "' + goal[0] + '" on Infinibrowser', 6);
         this._say(ctx, 'No starting point for "' + goal + '" yet');
         return false;
       }
       const missing = await this._missingLetters(goal.slice(seeds[0].len), ctx);
       if (missing.length) {
         const list = missing.map((c) => '"' + c + '"').join(', ');
-        this._note(ctx, 'no known tool adds ' + list);
+        this._note(ctx, 'no known tool adds ' + list + ' yet', 8);
         if (!ctx.planLogged) { ctx.planLogged = true; this._plan(ctx, "Can't build " + ctx.target + ' yet: no known tool adds ' + list + ' (nothing crafted)'); }
         return false;
       }
@@ -2103,7 +2199,7 @@
         const built = await this._extend(st, goal, ctx, (s) => this._finalize(s, goal, ctx));
         if (built === true || this._done(ctx)) return true;
       }
-      if (ctx.best && !this._done(ctx)) this._note(ctx, 'got as far as ' + ctx.best.text);
+      if (ctx.best && !this._done(ctx)) this._note(ctx, 'got as far as ' + ctx.best.text, 6);
       return !!this._done(ctx);
     }
 
@@ -2126,6 +2222,23 @@
       if (steps.length) this.mem.bankPut(ctx.target, steps, 'forge:' + (ctx.strategy || ''));
       return steps;
     }
+    // Budgets for a round. The first three are fixed; with "Never give up", every later round
+    // searches wider and deeper than the one before.
+    _levelFor(i) {
+      const L = C.forge.levels, last = L.length - 1;
+      if (i <= last) return L[i];
+      const k = i - last, b = L[last];
+      return {
+        name: 'wider x' + (k + 1),
+        depth: Math.min(12, b.depth + Math.ceil(k / 2)),
+        branches: Math.min(64, b.branches + 8 * k),
+        splits: Math.min(12, b.splits + k),
+        seeds: Math.min(24, b.seeds + 2 * k),
+        cands: Math.min(40, b.cands + 4 * k),
+        appendCrafts: Math.min(3000, b.appendCrafts * (1 + k)),
+        mine: b.mine + k
+      };
+    }
     async obtain(target, opts) {
       opts = opts || {};
       const S = opts.strategies || this.app.strategies();
@@ -2144,24 +2257,45 @@
       const result = (ok) => ({ ok, name: ok ? this._done(ctx) : null, ctx });
       if (this._done(ctx)) return result(true);
       const nested = ctx.nest > 0;
-      const startLevel = Math.max(0, Math.min(opts.level || 0, C.forge.levels.length - 1));
-      const maxRounds = nested ? 1 : (S.relentless ? C.forge.levels.length + C.forge.extraRounds : C.forge.giveUpRounds);
+      const last = C.forge.levels.length - 1;
+      const startLevel = Math.max(0, Math.min(opts.level || 0, last));
+      const maxRounds = nested ? 1 : (S.relentless ? Infinity : C.forge.giveUpRounds);
       // Progress marker: crafts made, tools learned, Infinibrowser data fetched.
       const mark = () => ctx.crafts + '|' + this.tools.size + '|' + this.ib.requests;
+      let stalls = 0;
       for (let round = 0; round < maxRounds; round++) {
-        ctx.levelIndex = Math.min(startLevel + round, C.forge.levels.length - 1);
-        ctx.level = C.forge.levels[ctx.levelIndex];
+        const li = startLevel + round;
+        ctx.levelIndex = Math.min(li, last);
+        ctx.level = this._levelFor(li);
         ctx.round = round + 1;
         const before = mark();
         if (S.ib && (await this.viaInfinibrowser(ctx))) break;
         if (this._done(ctx)) break;
-        if (S.compound && (await this.viaCompound(ctx))) break;
+        if (S.compound && (await this.viaCompound(ctx, false))) break;
         if (this._done(ctx)) break;
         if (S.build && (await this.viaStringBuild(ctx))) break;
         if (this._done(ctx)) break;
-        // A round that learned nothing new at the deepest level means every known route is used up.
-        if (mark() === before && ctx.levelIndex >= C.forge.levels.length - 1) break;
-        if (!nested && round + 1 < maxRounds) this.app.log('round', 'Round ' + ctx.round + ' (' + ctx.level.name + ') did not make ' + ctx.target + ' yet; searching deeper');
+        if (S.compound && li >= 1 && (await this.viaCompound(ctx, true))) break;
+        if (this._done(ctx)) break;
+        if (nested) break;
+        const why = this.reason(ctx);
+        if (mark() === before && li >= last) {
+          if (!S.relentless) break;
+          // Nothing new to try right now: wait, then look again with wider searches. Every few
+          // waits, forget cached "not on Infinibrowser" answers so new uploads are noticed.
+          stalls++;
+          if (stalls % 4 === 0) this.ib.forgetMisses();
+          const wait = Math.min(60, 5 * stalls);
+          this.app.log('round', 'Still working on ' + ctx.target + (why ? ' (' + why + ')' : '') + '; trying again in ' + wait + 's');
+          for (let t = wait; t > 0; t--) {
+            this._say(ctx, 'Not giving up' + (why ? ': ' + why : '') + '. Searching again in ' + t + 's');
+            await sleep(1000);
+            await this._check(ctx);
+          }
+        } else {
+          stalls = 0;
+          this.app.log('round', 'Round ' + ctx.round + ' (' + ctx.level.name + ') did not make ' + ctx.target + ' yet' + (why ? ' (' + why + ')' : '') + '; searching wider');
+        }
       }
       const ok = !!this._done(ctx);
       if (ok && !nested) {
@@ -2673,8 +2807,8 @@
             await this.maybeSweep();
           } else {
             failed.push(t);
-            const why = (r.ctx.notes || []).join('; ');
-            failedWhy.push(this.ib.problem() || (r.ctx.notes || [])[0] || '');
+            const why = this.forge.reason(r.ctx);
+            failedWhy.push(this.ib.problem() || this.forge.reason(r.ctx) || '');
             this.log('fail', 'Could not make ' + t + (why ? ': ' + why : '') + (this.opt.relentless ? '' : ' (turn on "Never give up" to search deeper)'));
           }
         }
@@ -3047,6 +3181,7 @@
     showNow(target) {
       this.$('#ic-now').classList.remove('done-ok', 'done-bad');
       this._setAction(null);
+      this._fixShown = false;
       this._nowState = { target, strategy: '', msg: 'Starting...', progress: 0, round: 1, level: '', crafts: 0, started: now() };
       this.$('#ic-now').classList.add('show');
       this._renderNow();
@@ -3089,6 +3224,9 @@
       s.round = ctx.round || 1;
       s.level = (ctx.level && ctx.level.name) || '';
       s.crafts = ctx.crafts;
+      // While Infinibrowser is unreachable the run keeps going; offer the fix right in the card.
+      const needsFix = !!this.ib.problem() && !Relay.alive();
+      if (needsFix !== !!this._fixShown) { this._fixShown = needsFix; this._setAction(needsFix ? this.relayAction() : null); }
       if (this._nowTimer) return;
       this._nowTimer = setTimeout(() => { this._nowTimer = null; this._renderNow(); }, 80);
     }

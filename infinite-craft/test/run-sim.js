@@ -63,7 +63,7 @@ function randomTargets(n, seed) {
 }
 
 function parseArgs(argv) {
-  const out = { seed: null, noise: null, targets: [], timeout: 240000, exact: false, random: 0, legacy: false, gm: false };
+  const out = { seed: null, noise: null, targets: [], timeout: 240000, exact: false, random: 0, legacy: false, gm: false, world: {} };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--seed') out.seed = argv[++i];
@@ -72,6 +72,9 @@ function parseArgs(argv) {
     else if (a === '--exact') out.exact = true;
     else if (a === '--legacy') out.legacy = true;
     else if (a === '--gm') out.gm = true;
+    else if (a === '--no-space-tool') out.world.spaceTool = false;
+    else if (a === '--words') out.world.extraWords = argv[++i].split(',');
+    else if (a === '--phrase-rate') out.world.phraseRate = parseFloat(argv[++i]);
     else if (a === '--random') out.random = parseInt(argv[++i], 10) || 20;
     else out.targets.push(a);
   }
@@ -201,7 +204,7 @@ async function runScenario(browser, scenario) {
   } else if (args.seed || args.noise != null || args.targets.length) {
     scenarios.push({
       name: 'custom',
-      world: { seed: args.seed || 'w1', noise: args.noise != null ? args.noise : 0.12 },
+      world: Object.assign({ seed: args.seed || 'w1', noise: args.noise != null ? args.noise : 0.12 }, args.world),
       targets: args.targets.length ? args.targets : DEFAULT_TARGETS,
       timeout: args.timeout,
       exact: args.exact,
@@ -212,6 +215,7 @@ async function runScenario(browser, scenario) {
     scenarios.push({ name: 'normal noise (12%)', world: { seed: 'w1', noise: 0.12 }, targets: DEFAULT_TARGETS, timeout: args.timeout });
     scenarios.push({ name: 'heavy noise (30%), other world', world: { seed: 'w2', noise: 0.3 }, targets: DEFAULT_TARGETS, timeout: args.timeout });
     scenarios.push({ name: 'exact spelling', world: { seed: 'w3', noise: 0.15 }, targets: ['Zorblaxian', 'qUiRkY', 'Hello World'], timeout: args.timeout, exact: true });
+    scenarios.push({ name: 'names with no space tool (like "Mr. Eremey Jeremy")', world: { seed: 'w5', noise: 0.12, spaceTool: false, phraseRate: 0.6, extraWords: ['Mr.', 'Jeremy', 'Ender', 'Steve'] }, targets: ['Mr. Eremey Jeremy', 'Ender Dragon', 'Steve Zorblax Jeremy'], timeout: args.timeout });
     scenarios.push({ name: 'older game client + GM_xmlhttpRequest', world: { seed: 'w4', noise: 0.12 }, targets: ['Dragon', 'Zorblaxian', 'Hello World'], timeout: args.timeout, legacy: true, gm: true });
   }
   const browser = await chromium.launch();
