@@ -73,6 +73,8 @@
       spaceTool: true,      // false: no tool appends a space, so phrases must be combined
       extraWords: [],       // extra words in the community word tree, e.g. ['Mr.', 'Jeremy']
       jam: [],              // [['erem', 'e']]: one-letter tools adding 'e' to text ending in "erem" misfire
+      digitTools: true,     // false: no tool appends a digit (.0 .. .9 don't exist)
+      joinQuoted: false,    // true: "abc" + "d" -> "abcd" (two straight-quoted texts join, longer first)
       names: {}
     }, cfg || {});
     const N = Object.assign({
@@ -112,7 +114,7 @@
       if (cfg.dotLetters !== false) toolList.push('.' + c, '.' + c.toUpperCase());
       if (cfg.curlyLetters !== false) toolList.push('“' + c + '”');
     }
-    for (const d of '0123456789') toolList.push('.' + d);
+    if (cfg.digitTools !== false) for (const d of '0123456789') toolList.push('.' + d);
     if (cfg.spaceTool !== false) toolList.push('“ ”');
     toolList.push('\'-\'', '\'_\'', '.\'');
     for (const chunk of ['er', 'ing', 'ian', 'ness', 'land', 'ly', 'tion', 'saurus', 'xian']) toolList.push('“' + chunk + '”');
@@ -139,6 +141,8 @@
             cfg.jam.some(([after, c]) => ps.core.toLowerCase().endsWith(after) && pt.core.toLowerCase() === c)) {
           return ALL[Math.floor(rnd(S + 'jam' + key(s, t)) * ALL.length)];
         }
+        if (cfg.joinQuoted && ps.w === 'dq' && pt.w === 'dq' && pt.core &&
+            (pt.core.length < ps.core.length || (pt.core.length === ps.core.length && s < t))) return wrap(ps.core + pt.core, 'dq');
         if (pt.w === 'sq' && tools.has(t)) return wrap(ps.core + pt.core, ps.w);
         if (pt.w === 'dot' && tools.has(t)) return wrap(ps.core + pt.core, ps.w);
         if (pt.w === 'cq' && ps.w === 'dq' && pt.core) return wrap(ps.core + pt.core, 'cq');

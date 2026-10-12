@@ -57,6 +57,10 @@ waits it re-checks Infinibrowser for new uploads. It never guesses at random.
    letters (`"crab"` when it wanted `"cra"`) are repaired with a backspace tool when one
    exists. The log shows the plan before it starts.
 
+   **When no tool adds a character at all** (digits are common), it makes that character on
+   its own (`"0"`, from the item `0` and a quote tool) and attaches it in one craft
+   (`"The_"` + `"0"` → `"The_0"`).
+
    **When one spot keeps failing** (every tool for `e` on `"mr. Erem"` gives something else),
    later rounds do three things. They search Infinibrowser for how other people added that
    letter after the same ending (`"rem"` → `"reme"`) and try those tools. They try every
@@ -97,6 +101,14 @@ exist.
 
 ## Changelog
 
+- **6.7.0**: Characters no tool adds (like the `0` in `The_0b1ivion`) no longer stop the
+  build. Before, it refused to start ("no known tool adds "0"") and waited forever. Now it
+  makes that character on its own (the item `0`, quoted: `"0"`) and attaches it
+  (`"The_"` + `"0"`). It uses Infinibrowser more gently, because heavy use triggers its
+  "checking your browser" page, which blocks the script. Wider rounds no longer re-download
+  pages they already have, surveys stop growing past a sensible size, and requests stay under
+  100 a minute after the first burst. When Infinibrowser is what's blocking, the card now
+  says so (instead of "no known tool adds …") and retries the connection by itself.
 - **6.6.0**: Much less lag, especially with big saves. With 40,000 items the page used to
   be frozen 58% of the time during a run (worst freeze 0.5 s). Now it's 0%, and words are
   made about 3 times faster. The script used to re-index your whole inventory twice per

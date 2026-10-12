@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Infinite Craft - Word Forge Pro (Auto Combiner v6)
 // @namespace    https://neal.fun/infinite-craft/
-// @version      6.6.0
+// @version      6.7.0
 // @description  Type any word and it gets crafted: looks it up on Infinibrowser and crafts the uploaded recipe (self-healing), or builds brand-new words letter by letter with text tools learned from Infinibrowser. No random combining. Keeps the National Pokedex queue, history and save tools.
 // @match        https://neal.fun/infinite-craft*
 // @match        https://infinibrowser.wiki/*
@@ -92,7 +92,7 @@
   /* ============================================================
    * Config
    * ============================================================ */
-  const VERSION = '6.6.0';
+  const VERSION = '6.7.0';
 
   // Small settings stay in localStorage (same keys as v5.x so settings carry over).
   // Big learned data (tried pairs, pair results, Infinibrowser cache) lives in IndexedDB
@@ -168,6 +168,9 @@
       timeout: 12000,
       retries: 5,
       cacheMax: 6000,
+      // After a first burst, stay under this many requests a minute: heavy use makes
+      // Infinibrowser show its "checking your browser" page, which blocks the script.
+      perMinute: 100,
       posTTL: 30 * 864e5,
       negTTL: 2 * 864e5,
       offlineCooldown: 45000
@@ -765,7 +768,13 @@
       if (this.offline || (this.challengeAt && now() - this.challengeAt < C.ib.offlineCooldown)) throw new Error('ib-offline');
       const url = C.ib.base + path + '?' + Object.keys(params).map((k) => k + '=' + encodeURIComponent(params[k])).join('&');
       for (let attempt = 0; attempt <= C.ib.retries; attempt++) {
-        const start = Math.max(now(), this.nextAt, this.cooldownUntil);
+        let start = Math.max(now(), this.nextAt, this.cooldownUntil);
+        // (gap 0 means no pacing at all, as in the tests.)
+        if (C.ib.gap > 0 && C.ib.perMinute > 0) {
+          const recent = this._recent = (this._recent || []).filter((t) => start - t < 60000);
+          if (recent.length >= C.ib.perMinute) start = Math.max(start, recent[recent.length - C.ib.perMinute] + 60000);
+          recent.push(start);
+        }
         this.nextAt = start + C.ib.gap;
         if (start > now()) await sleep(start - now());
         this.requests++;
@@ -866,18 +875,22 @@
     }
     async recipes(id, pages) { return this._list('recipes', id, pages || 1); }
     async uses(id, pages) { return this._list('uses', id, pages || 1); }
+    // One cache entry per item, reused for any request that wants as many pages or fewer, so
+    // wider searches never download the same pages again.
     async _list(kind, id, pages) {
-      const key = (kind === 'recipes' ? 'r:' : 'u:') + id + ':' + pages;
+      const key = (kind === 'recipes' ? 'r:' : 'u:') + id;
       const hit = this._cached(key);
-      if (hit !== undefined) return hit;
-      if (this.inflight.has(key)) return this.inflight.get(key);
+      if (hit !== undefined && (hit === null || hit.complete || (hit.pages || 0) >= pages)) return hit;
+      const fkey = key + ':' + pages;
+      if (this.inflight.has(fkey)) return this.inflight.get(fkey);
       const p = (async () => {
         const out = [];
-        let total = 0, offset = 0;
+        let total = 0, offset = 0, complete = false, fetched = 0;
         try {
           for (let page = 0; page < pages; page++) {
             const json = await this._fetchJSON('/' + kind, { id, offset });
-            if (json == null) { if (page === 0) { this._put(key, null); return null; } break; }
+            if (json == null) { if (page === 0) { this._put(key, null); return null; } complete = true; break; }
+            fetched++;
             total = typeof json.total === 'number' ? json.total : total;
             const rows = (kind === 'recipes' ? json.recipes : json.uses) || [];
             for (const row of rows) {
@@ -890,19 +903,19 @@
               }
             }
             offset += rows.length;
-            if (!rows.length || (total && offset >= total)) break;
+            if (!rows.length || (total && offset >= total)) { complete = true; break; }
           }
-          const v = { total, list: out };
+          const v = { total, list: out, pages: fetched, complete };
           this._put(key, v);
           this._learnExists(id);
           return v;
         } catch (e) {
           return out.length ? { total, list: out } : undefined;
         } finally {
-          this.inflight.delete(key);
+          this.inflight.delete(fkey);
         }
       })();
-      this.inflight.set(key, p);
+      this.inflight.set(fkey, p);
       return p;
     }
     // First variant of a name that Infinibrowser knows about.
@@ -1637,7 +1650,7 @@
           for (const form of [tail, tail.toLowerCase(), Text.capFirst(tail.toLowerCase())]) ids.push(Text.wrap(form, 'dq'), Text.wrap(form, 'cq'));
         }
       }
-      await this._mineIds(Array.from(new Set(ids)), 'recipes', null, level >= 3 ? Math.min(6, level - 1) : 0);
+      await this._mineIds(Array.from(new Set(ids)), 'recipes', null, level >= 3 ? Math.min(3, level - 1) : 0);
       if (level >= 2) await this._mineIds([Text.wrap(ch, 'sq'), Text.wrap(ch, 'cq'), Text.wrap(lc, 'dq')], 'uses', null, 2);
       return this.hasAppendersFor(ch);
     }
@@ -1966,6 +1979,14 @@
           if (k > 0) add(Text.wrap(cf.slice(0, k), w), k, w, false);
         }
       }
+      // Nothing quoted starts with this character: the plain item ("0") can be quoted.
+      if (!out.some((sd) => sd.w !== 'plain' && sd.len >= 1)) {
+        for (const f of this._caseForms(goal[0], ctx.exact)) {
+          const owned = this.game.find(f, true);
+          if (owned) add(owned, 1, 'plain', true);
+          else if (await this.ib.exists(f)) add(f, 1, 'plain', false);
+        }
+      }
       // Longest real word the target starts with (needs a quote tool afterwards).
       if (!/\s/.test(goal.slice(0, 3))) {
         for (const cf of Array.from(new Set([Text.title(goal), goal]))) {
@@ -2159,6 +2180,7 @@
           return dfs(next, depth + 1);
         };
         const cands = await this._appendCandidates(cur, rest, goal, ctx);
+        const noTool = !cands.some((c) => c.adds && Text.startsCI(rest, c.adds));
         if (!cands.length) this._note(ctx, 'no known tool adds "' + rest[0] + '"', 8);
         let got = await tryCands(cands);
         if (got === 'budget') return null;
@@ -2188,10 +2210,12 @@
         // Still stuck at the front line: build part of what's left as its own quoted piece and
         // attach it in one craft ("mr. Erem" + “ey Jeremy” -> “mr. Eremey Jeremy”), so the pair
         // that keeps failing isn't needed at all.
-        if (ctx.levelIndex >= 1 && !ctx.spliceDepth && (ctx.splices || 0) < 2 + (ctx.round || 1) &&
-            (!ctx.best || cur.core.length >= ctx.best.core.length - 1) && ctx.crafts - startCrafts < ctx.level.appendCrafts) {
-          ctx.splices = (ctx.splices || 0) + 1;
-          const sp = await this._spliceChunk(cur, goal, ctx);
+        // When no tool adds the next character at all ("0"), this is the way, from round 1.
+        if (!ctx.spliceDepth && ctx.crafts - startCrafts < ctx.level.appendCrafts &&
+            (noTool || (ctx.levelIndex >= 1 && (ctx.splices || 0) < 2 + (ctx.round || 1) &&
+              (!ctx.best || cur.core.length >= ctx.best.core.length - 1)))) {
+          if (!noTool) ctx.splices = (ctx.splices || 0) + 1;
+          const sp = await this._spliceChunk(cur, goal, ctx, noTool);
           if (sp === true) return true;
           if (sp && !visited.has(sp.text)) {
             const out = await dfs(sp, depth + 1);
@@ -2202,14 +2226,18 @@
       };
       return dfs(st, 0);
     }
-    async _spliceChunk(cur, goal, ctx) {
+    // single: no tool adds the next character, so start with that character alone ("0").
+    async _spliceChunk(cur, goal, ctx, single) {
       const rest = goal.slice(cur.core.length);
-      if (rest.length < 2) return null;
+      if (rest.length < (single ? 1 : 2)) return null;
       const prefixOk = (core) => (ctx.exact ? goal.startsWith(core) : Text.startsCI(goal, core));
       const word = rest.search(/\s/);
-      const lens = Array.from(new Set([rest.length, word, Math.min(rest.length, 6), Math.min(rest.length, 3), 2]))
-        .filter((k) => k >= 2 && k <= rest.length).slice(0, 4);
+      const lens = (single ? [1, 2] : []).concat(Array.from(new Set([rest.length, word, Math.min(rest.length, 6), Math.min(rest.length, 3), 2]))
+        .filter((k) => k >= 2 && k <= rest.length).slice(0, 4));
+      const tried = new Set();
       for (const k of lens) {
+        if (k > rest.length || tried.has(k)) continue;
+        tried.add(k);
         await this._check(ctx);
         const piece = rest.slice(0, k);
         // First whatever quoted piece is quickest, then (if that didn't attach) a curly one.
@@ -2241,7 +2269,7 @@
       // A piece gets a share of the round's budget, so one stubborn piece can't eat the round.
       sub.level = Object.assign({}, ctx.level, { appendCrafts: Math.max(60, Math.ceil(ctx.level.appendCrafts / 4)) });
       let found = null;
-      const seeds = (await this._seeds(core, sub)).filter((sd) => sd.w !== 'plain' && (!curly || sd.w === 'cq' || sd.len < core.length))
+      const seeds = (await this._seeds(core, sub)).filter((sd) => !curly || sd.w === 'cq' || sd.len < core.length)
         .sort((a, b) => (b.len - a.len) || ((a.w === 'cq' ? 0 : 1) - (b.w === 'cq' ? 0 : 1)))
         .slice(0, Math.max(2, Math.ceil(ctx.level.seeds / 2)));
       const onDone = curly ? async (st) => { if (st.w === 'cq') { found = st; return true; } return false; } : null;
@@ -2250,8 +2278,9 @@
         if (sub.crafts >= ctx.level.appendCrafts / 2) break;
         const s0 = seed.owned ? seed.id : await this.ensure(seed.id, sub, ctx.level.depth, null);
         if (!s0) continue;
-        const st = Object.assign(Text.parse(s0), { text: s0 });
-        if (!QUOTED[st.w]) continue;
+        let st = Object.assign(Text.parse(s0), { text: s0 });
+        if (st.w === 'plain') st = await this._rewrap(st, core, sub);
+        if (!st || !QUOTED[st.w]) continue;
         const built = await this._extend(st, core, sub, onDone);
         if (found) break;
         if (built === true) {
@@ -2391,9 +2420,22 @@
           this._say(ctx, 'Searching Infinibrowser for a tool that adds "' + ch + '"...');
           ok = await this.tools.mineChar(ch, ctx.level.mine);
         }
+        // No tool adds it, but "0" itself can be made (the item 0, quoted) and attached.
+        if (!ok && await this._charPieceOk(ch, forms)) {
+          ctx.attachChars = ctx.attachChars || [];
+          if (ctx.attachChars.indexOf(ch) < 0) ctx.attachChars.push(ch);
+          ok = true;
+        }
         if (!ok) missing.push(ch);
       }
       return missing;
+    }
+    async _charPieceOk(ch, forms) {
+      for (const f of forms) {
+        for (const w of ['dq', 'cq', 'sq']) if (await this._existsOrOwned(Text.wrap(f, w))) return true;
+        if (await this._existsOrOwned(f)) return true;
+      }
+      return false;
     }
     async viaStringBuild(ctx) {
       ctx.strategy = 'String building';
@@ -2410,8 +2452,8 @@
       const missing = await this._missingLetters(goal.slice(seeds[0].len), ctx);
       if (missing.length) {
         const list = missing.map((c) => '"' + c + '"').join(', ');
-        this._note(ctx, 'no known tool adds ' + list + ' yet', 8);
-        if (!ctx.planLogged) { ctx.planLogged = true; this._plan(ctx, "Can't build " + ctx.target + ' yet: no known tool adds ' + list + ' (nothing crafted)'); }
+        this._note(ctx, 'nothing on Infinibrowser adds or makes ' + list + ' yet', 8);
+        if (!ctx.planLogged) { ctx.planLogged = true; this._plan(ctx, "Can't build " + ctx.target + ' yet: no known tool adds ' + list + ", and Infinibrowser doesn't have " + (missing.length > 1 ? 'them' : 'it') + ' on its own to attach (nothing crafted)'); }
         return false;
       }
       if (!ctx.planLogged) {
@@ -2419,7 +2461,9 @@
         const s0 = seeds[0];
         const rest = goal.slice(s0.len);
         this._plan(ctx, 'Plan: start from ' + s0.id + (s0.owned ? ' (already have it)' : ' (recipe on Infinibrowser)') +
-          (rest ? ', add "' + rest + '" with letter tools' : '') + ', then unquote it');
+          (rest ? ', add "' + rest + '" with letter tools' : '') +
+          (ctx.attachChars && ctx.attachChars.length ? ' (no tool adds ' + ctx.attachChars.map((c) => '"' + c + '"').join(', ') + ', so those are made separately and attached)' : '') +
+          ', then unquote it');
       }
       let used = 0;
       let prevCrafts = ctx.crafts;
@@ -2526,6 +2570,22 @@
         if (this._done(ctx)) break;
         if (nested) break;
         const why = this.reason(ctx);
+        // Without Infinibrowser nothing new can be looked up, so that is the real blocker.
+        const ibWhy = this.ib.problem();
+        if (ibWhy && S.relentless) {
+          stalls++;
+          const wait = Math.min(60, 10 + 5 * stalls);
+          this.app.log('round', 'Waiting for Infinibrowser before trying ' + ctx.target + ' again: ' + ibWhy);
+          for (let t = wait; t > 0 && this.ib.problem(); t--) {
+            this._say(ctx, "Can't reach Infinibrowser, so nothing new can be looked up. " + ibWhy + ' Trying again in ' + t + 's.');
+            await sleep(1000);
+            await this._check(ctx);
+          }
+          // Try the connection again right away, at the same search level (nothing was searched).
+          this.ib.resetHealth();
+          round--;
+          continue;
+        }
         if (mark() === before && li >= last) {
           if (!S.relentless) break;
           // Nothing new to try right now: wait, then look again with wider searches. Every few
