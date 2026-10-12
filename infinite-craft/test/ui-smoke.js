@@ -76,6 +76,7 @@ async function check(cond, label) {
   await page.click('#ic-start');
   await page.waitForFunction(() => !window._icAutoInstance.running, null, { timeout: 60000 });
   await check(await app(() => !!window._icAutoInstance.game.find('Dragon', false)), 'Start button made Dragon');
+  await check(await app(() => window._icAutoInstance.stats.newWords) > 0 && await page.textContent('#ic-s-new') !== '0', 'new items are counted as discoveries');
   await check((await page.inputValue('#ic-target')).trim() === '', 'made target removed from the list');
   await check(!(await page.isDisabled('#ic-copy-recipe')), 'Copy Last Recipe enabled');
 
@@ -126,6 +127,28 @@ async function check(cond, label) {
   await page.setInputFiles('#ic-import-file', { name: 'h.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(exported)) });
   await page.waitForFunction(() => /Imported/.test(document.querySelector('#ic-status').textContent), null, { timeout: 5000 });
   await check(await app(() => window._icAutoInstance.mem.pairs.size) > 10, 'import restored pair results');
+
+  // Pair results are saved in small batches and read back on the next load.
+  await check(await app(async () => {
+    const a = window._icAutoInstance;
+    await a.mem.flush();
+    a.mem.remember('Persist A', 'Persist B', 'Persist C');
+    a.mem.forget('Fire', 'Water');
+    await a.mem.flush();
+    const m2 = new a.mem.constructor();
+    await m2.load();
+    return m2.result('Persist A', 'Persist B') === 'Persist C' && m2.result('Fire', 'Water') === undefined && m2.pairs.size === a.mem.pairs.size;
+  }), 'pair results survive a reload (saved in small batches, deletions too)');
+  await check(await app(async () => {
+    const a = window._icAutoInstance;
+    for (let i = 0; i < 21; i++) { a.mem.remember('Fold ' + i, 'X', 'Y' + i); await a.mem.flush(); }
+    const m2 = new a.mem.constructor();
+    await m2.load();
+    await m2.flush();
+    const m3 = new a.mem.constructor();
+    await m3.load();
+    return m3._pairChunks.length === 0 && m3.result('Fold 20', 'X') === 'Y20' && m3.pairs.size === a.mem.pairs.size;
+  }), 'saved batches fold back into one table');
 
   // Pokedex with mocked PokeAPI.
   await page.click('details[data-sec="pokedex"] > summary');

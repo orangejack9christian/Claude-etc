@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Infinite Craft - Word Forge Pro (Auto Combiner v6)
 // @namespace    https://neal.fun/infinite-craft/
-// @version      6.5.0
+// @version      6.6.0
 // @description  Type any word and it gets crafted: looks it up on Infinibrowser and crafts the uploaded recipe (self-healing), or builds brand-new words letter by letter with text tools learned from Infinibrowser. No random combining. Keeps the National Pokedex queue, history and save tools.
 // @match        https://neal.fun/infinite-craft*
 // @match        https://infinibrowser.wiki/*
@@ -92,7 +92,7 @@
   /* ============================================================
    * Config
    * ============================================================ */
-  const VERSION = '6.5.0';
+  const VERSION = '6.6.0';
 
   // Small settings stay in localStorage (same keys as v5.x so settings carry over).
   // Big learned data (tried pairs, pair results, Infinibrowser cache) lives in IndexedDB
@@ -198,6 +198,19 @@
    * Small utilities
    * ============================================================ */
   const sleep = (ms) => new Promise((r) => setTimeout(r, Math.max(0, ms | 0)));
+  // Let the page draw and handle input, then continue. A message channel isn't slowed down in
+  // background tabs the way setTimeout is.
+  const yieldToPage = (() => {
+    let ch = null;
+    const q = [];
+    return () => new Promise((resolve) => {
+      try {
+        if (!ch) { ch = new window.MessageChannel(); ch.port1.onmessage = () => { const f = q.shift(); if (f) f(); }; }
+        q.push(resolve);
+        ch.port2.postMessage(0);
+      } catch (e) { setTimeout(resolve, 0); }
+    });
+  })();
   const now = () => Date.now();
   const pairKey = (a, b) => (a <= b ? a + '||' + b : b + '||' + a);
   const clock = () => {
@@ -395,12 +408,25 @@
       this.idb = false;
       this._dirty = new Set();
       this._timer = null;
+      // Pair results are saved as small batches of new results (rewriting a 100,000-entry
+      // table every few seconds froze the game). pairsFull: write the whole table next time.
+      this._pairLog = [];
+      this._pairChunks = [];
+      this.pairsFull = false;
     }
     async load() {
       this.idb = await KV.available();
-      const [tried, pairs, bad] = await Promise.all([KV.get('tried'), KV.get('pairs'), KV.get('bad')]);
+      const [tried, pairs, bad, meta] = await Promise.all([KV.get('tried'), KV.get('pairs'), KV.get('bad'), KV.get('pairsMeta')]);
       if (Array.isArray(tried)) for (const k of tried) this.tried.add(k);
       if (pairs && typeof pairs === 'object') for (const k of Object.keys(pairs)) this.pairs.set(k, pairs[k]);
+      if (meta && Array.isArray(meta.chunks)) {
+        this._pairChunks = meta.chunks.slice();
+        const chunks = await Promise.all(this._pairChunks.map((k) => KV.get(k)));
+        for (const c of chunks) if (Array.isArray(c)) for (const [k, v] of c) { this.pairs.delete(k); if (v != null) this.pairs.set(k, v); }
+        // Fold the batches back into one table now and then (at load, before any crafting).
+        if (this._pairChunks.length >= 20) { this.pairsFull = true; this._dirty.add('pairs'); }
+      }
+      if (this.pairs.size > C.maxPairs) { trimMap(this.pairs, C.maxPairs); this.pairsFull = true; this._dirty.add('pairs'); }
       if (Array.isArray(bad)) for (const k of bad) this.bad.add(k);
       // Migrate v5.x localStorage blobs.
       let migrated = false;
@@ -417,11 +443,12 @@
       if ((Store.get(KEYS.memVer, 0) || 0) < 2) {
         let dropped = 0;
         for (const [k, v] of Array.from(this.pairs)) if (v === '') { this.pairs.delete(k); dropped++; }
-        if (dropped) this._dirty.add('pairs');
+        if (dropped) { this._dirty.add('pairs'); this.pairsFull = true; }
         Store.set(KEYS.memVer, 2);
       }
       if (migrated && this.idb) {
         this._dirty.add('tried'); this._dirty.add('pairs'); this._dirty.add('bad');
+        this.pairsFull = true;
         await this.flush();
         // Free the game's localStorage space; the data now lives in IndexedDB.
         Store.del(KEYS.tried); Store.del(KEYS.pairResults); Store.del(KEYS.badRecipePairs); Store.del(KEYS.altRecipeCache);
@@ -442,11 +469,28 @@
           if (this.idb) await KV.set('tried', Array.from(this.tried));
           else Store.set(KEYS.tried, Array.from(this.tried));
         } else if (name === 'pairs') {
+          if (this.idb && !this.pairsFull) {
+            if (!this._pairLog.length) continue;
+            const log = this._pairLog;
+            this._pairLog = [];
+            const key = 'pairs.' + Date.now().toString(36) + '.' + this._pairChunks.length;
+            await KV.set(key, log);
+            this._pairChunks.push(key);
+            await KV.set('pairsMeta', { chunks: this._pairChunks });
+            continue;
+          }
+          this.pairsFull = false;
+          this._pairLog = [];
           trimMap(this.pairs, this.idb ? C.maxPairs : 8000);
           const obj = {};
           for (const [k, v] of this.pairs) obj[k] = v;
-          if (this.idb) await KV.set('pairs', obj);
-          else Store.set(KEYS.pairResults, obj);
+          if (this.idb) {
+            const old = this._pairChunks;
+            this._pairChunks = [];
+            await KV.set('pairs', obj);
+            await KV.set('pairsMeta', { chunks: [] });
+            for (const k of old) await KV.del(k);
+          } else Store.set(KEYS.pairResults, obj);
         } else if (name === 'bad') {
           trimSet(this.bad, C.maxBad);
           if (this.idb) await KV.set('bad', Array.from(this.bad));
@@ -477,9 +521,15 @@
       if (this.pairs.get(k) === v) return;
       this.pairs.delete(k);
       this.pairs.set(k, v);
+      this._pairLog.push([k, v]);
       this._mark('pairs');
     }
-    forget(a, b) { if (this.pairs.delete(pairKey(a, b))) this._mark('pairs'); }
+    forget(a, b) {
+      const k = pairKey(a, b);
+      if (this.pairs.delete(k)) { this._pairLog.push([k, null]); this._mark('pairs'); }
+    }
+    // Many pairs changed at once (import, migration, clearing): save the whole table next time.
+    pairsChanged() { this.pairsFull = true; this._mark('pairs'); }
     _badKey(result, a, b) { return Text.loose(result) + '::' + pairKey(a, b); }
     isBad(result, a, b) { return this.bad.has(this._badKey(result, a, b)); }
     markBad(result, a, b) { this.bad.add(this._badKey(result, a, b)); this._mark('bad'); }
@@ -501,6 +551,7 @@
     resetLearned() {
       this.tried.clear(); this.pairs.clear(); this.bad.clear();
       this._dirty.add('tried'); this._dirty.add('pairs'); this._dirty.add('bad');
+      this.pairsFull = true;
       return this.flush();
     }
   }
@@ -677,7 +728,7 @@
     }
     _scheduleSave() {
       if (this._saveTimer) return;
-      this._saveTimer = setTimeout(() => { this._saveTimer = null; this.save(); }, 5000);
+      this._saveTimer = setTimeout(() => { this._saveTimer = null; this.save(); }, 20000);
     }
     async save() {
       const entries = [];
@@ -877,14 +928,43 @@
     constructor() {
       this._vm = null;
       this._vmAt = 0;
+      this._seq = 0;
+      this._reset();
+      this._sig = '';
+      this._sigAt = 0;
+      this.version = 0;
+      this.lastChange = null;
+      this.dragger = null;
+    }
+    _reset() {
       this.exact = new Set();
       this.byKey = new Map();
       this.bySoft = new Map();
       this.objs = new Map();
-      this._sig = '';
-      this._sigAt = 0;
-      this.version = 0;
-      this.dragger = null;
+      this.wrapped = [];     // quoted/decorated names ("zor", #abc, .x), for resuming string builds
+      this.hashSum = 0;      // order-independent fingerprint of the inventory
+      this.born = new Map(); // name -> when it was first seen (see mark/isNewSince)
+      this._n = 0;
+      this._first = undefined;
+      this._last = undefined;
+    }
+    _textOf(it) {
+      const t = it && (it.text != null ? it.text : it.name);
+      return t != null && t !== '' ? String(t) : null;
+    }
+    _add(t, obj, oldBorn) {
+      if (obj) this.objs.set(t, obj);
+      if (this.exact.has(t)) return;
+      this.exact.add(t);
+      const b = oldBorn && oldBorn.get(t);
+      this.born.set(t, b !== undefined ? b : ++this._seq);
+      const index = (map, k) => { const arr = map.get(k); if (arr) arr.push(t); else map.set(k, [t]); };
+      index(this.byKey, Text.key(t));
+      index(this.bySoft, Text.soft(t));
+      if (Text.parse(t).w !== 'plain') this.wrapped.push(t);
+      let h = 0;
+      for (let j = 0; j < t.length; j++) h = (Math.imul(h, 31) + t.charCodeAt(j)) | 0;
+      this.hashSum = (this.hashSum + (h >>> 0)) >>> 0;
     }
     _readNode(node) {
       const out = [];
@@ -964,56 +1044,63 @@
       if (v && v.items && typeof v.items.length === 'number') return v.items;
       return null;
     }
-    _list() {
-      const list = this._rawItems();
-      const names = [], objs = [];
-      if (list && list.length) {
-        for (const it of list) {
-          const t = it && (it.text != null ? it.text : it.name);
-          if (t != null && t !== '') { names.push(String(t)); objs.push(it); }
-        }
-        return { names, objs };
-      }
-      document.querySelectorAll(C.itemSel).forEach((el) => {
-        const t = (el.getAttribute('data-item-text') || el.textContent || '').trim();
-        if (t) { names.push(t); objs.push(null); }
-      });
-      return { names, objs };
-    }
-    _signature() {
-      const list = this._rawItems();
-      if (list && list.length) {
-        const n = list.length;
-        const f = list[0] && list[0].text, l = list[n - 1] && list[n - 1].text;
-        return 'v' + n + ':' + f + ':' + l;
-      }
-      return 'd' + document.querySelectorAll(C.itemSel).length;
-    }
+    // Keeps the inventory index up to date. Big saves have tens of thousands of items, so only
+    // new items are indexed; everything is re-indexed only when items disappear or the save
+    // changes. force: check now instead of at most every 40 ms; 'full': re-index everything.
     refresh(force) {
-      // Inventory only changes through crafts (which force a refresh) or the player, so a
-      // signature check every few ms is plenty, even with huge saves.
       if (!force && now() - this._sigAt < 40) return false;
       this._sigAt = now();
-      const sig = this._signature();
-      if (!force && sig === this._sig) return false;
-      const { names, objs } = this._list();
-      this.exact = new Set();
-      this.byKey = new Map();
-      this.bySoft = new Map();
-      this.objs = new Map();
-      const index = (map, k, t) => { const arr = map.get(k); if (arr) arr.push(t); else map.set(k, [t]); };
-      for (let i = 0; i < names.length; i++) {
-        const t = names[i];
-        this.exact.add(t);
-        if (objs[i]) this.objs.set(t, objs[i]);
-        index(this.byKey, Text.key(t), t);
-        index(this.bySoft, Text.soft(t), t);
+      const list = this._rawItems();
+      if (!list || !list.length) return this._refreshDom(force);
+      const n = list.length;
+      const first = this._textOf(list[0]), last = this._textOf(list[n - 1]);
+      const prevN = this._n;
+      if (force !== 'full' && n === prevN && first === this._first && last === this._last) return false;
+      let kind = 'append', prev = null;
+      if (force !== 'full' && prevN > 0 && n > prevN && first === this._first && this._textOf(list[prevN - 1]) === this._last) {
+        // New items at the end (the usual case after a craft).
+        for (let i = prevN; i < n; i++) { const t = this._textOf(list[i]); if (t) this._add(t, list[i]); }
+      } else {
+        // Something else changed: add whatever is new; if anything disappeared (or the save
+        // changed), re-index everything.
+        if (force !== 'full' && prevN > 0 && n >= prevN) {
+          for (let i = 0; i < n; i++) { const t = this._textOf(list[i]); if (t) this._add(t, list[i]); }
+        }
+        if (force === 'full' || prevN === 0 || n < prevN || this.exact.size > n) {
+          prev = this.exact;
+          const oldBorn = this.born;
+          this._reset();
+          for (let i = 0; i < n; i++) { const t = this._textOf(list[i]); if (t) this._add(t, list[i], oldBorn); }
+          kind = 'rebuild';
+        }
       }
-      this._sig = sig;
+      this._n = n;
+      this._first = first;
+      this._last = last;
       this.version++;
+      this.lastChange = { kind, prev };
+      return true;
+    }
+    // No game API: read the item list from the page (older layouts).
+    _refreshDom(force) {
+      const els = document.querySelectorAll(C.itemSel);
+      const sig = 'd' + els.length;
+      if (force !== 'full' && sig === this._sig) return false;
+      this._sig = sig;
+      const prev = this.exact, oldBorn = this.born;
+      this._reset();
+      els.forEach((el) => {
+        const t = (el.getAttribute('data-item-text') || el.textContent || '').trim();
+        if (t) this._add(t, null, oldBorn);
+      });
+      this.version++;
+      this.lastChange = { kind: 'rebuild', prev };
       return true;
     }
     names() { this.refresh(); return Array.from(this.exact); }
+    // mark() before a craft, isNewSince(name, mark) after: was the item added in between?
+    mark() { this.refresh(true); return this._seq; }
+    isNewSince(name, mark) { const b = this.born.get(name); return b === undefined || b > mark; }
     count() { this.refresh(); return this.exact.size; }
     // mode: 'exact' (or true), 'case', 'loose' (or false); see Text.same.
     find(name, mode) {
@@ -1055,25 +1142,25 @@
     _detect(before, ret) {
       if (ret && typeof ret === 'object') {
         const t = typeof ret.text === 'string' ? ret.text : (typeof ret.result === 'string' ? ret.result : null);
-        if (t && t !== 'Nothing') return { text: t, isNew: !before.exact.has(t) || !!(ret.isNew || ret.discovered) };
+        if (t && t !== 'Nothing') return { text: t, isNew: this.isNewSince(t, before.mark) || !!(ret.isNew || ret.discovered) };
         if (t === 'Nothing') return { text: null, nothing: true };
       }
       const v = this.vm();
       if (v && v.items && v.items.length > before.len) {
         for (let i = before.len; i < v.items.length; i++) {
           const t = v.items[i] && v.items[i].text;
-          if (t && !before.exact.has(t)) return { text: t, isNew: true };
+          if (t && this.isNewSince(t, before.mark)) return { text: t, isNew: true };
         }
         for (let i = 0; i < v.items.length; i++) {
           const t = v.items[i] && v.items[i].text;
-          if (t && !before.exact.has(t)) return { text: t, isNew: true };
+          if (t && this.isNewSince(t, before.mark)) return { text: t, isNew: true };
         }
       }
       const after = this.instanceCounts();
       for (const t of Object.keys(after)) {
         let grew = after[t] - (before.inst[t] || 0);
         if (before.dragged && (t === before.a || t === before.b)) grew -= (before.a === before.b ? 2 : 1);
-        if (grew > 0) return { text: t, isNew: !before.exact.has(t) };
+        if (grew > 0) return { text: t, isNew: this.isNewSince(t, before.mark) };
       }
       return null;
     }
@@ -1093,7 +1180,14 @@
       opts = opts || {};
       this.refresh(true);
       const ic = this.ic();
-      if (ic && typeof ic.createInstance === 'function') return this._craftIC(ic, a, b, opts);
+      if (ic && typeof ic.createInstance === 'function') {
+        const r = await this._craftIC(ic, a, b, opts);
+        if (!r.error) return r;
+        // The game may have replaced its item objects (e.g. after reloading the save): re-index
+        // everything and try once more.
+        this.refresh('full');
+        return this._craftIC(ic, a, b, opts);
+      }
       return this._craftLegacy(a, b, opts);
     }
     _spawnPoint(opts) {
@@ -1110,7 +1204,7 @@
     async _craftIC(ic, a, b, opts) {
       const A = this.objs.get(a), B = this.objs.get(b);
       if (!A || !B) return { result: null, error: 'missing-item' };
-      const exactBefore = this.exact;
+      const mark = this.mark();
       const lenBefore = (this._rawItems() || []).length;
       const p = this._spawnPoint(opts);
       const findInst = (text) => {
@@ -1142,7 +1236,7 @@
         const list = this._rawItems() || [];
         for (let i = lenBefore; i < list.length; i++) {
           const t = list[i] && list[i].text;
-          if (t && !exactBefore.has(t)) { text = t; break; }
+          if (t && this.isNewSince(t, mark)) { text = t; break; }
         }
       }
       // Clean up what this craft put on the board (keep the result if "show crafts" is on).
@@ -1155,12 +1249,12 @@
         }
       } catch (e) {}
       this.refresh(true);
-      return { result: text, isNew: !!(text && !exactBefore.has(text)), timedOut, error };
+      return { result: text, isNew: !!(text && this.isNewSince(text, mark)), timedOut, error };
     }
     async _craftLegacy(a, b, opts) {
       const v = this.vm();
       const before = {
-        exact: this.exact,
+        mark: this.mark(),
         len: v && v.items ? v.items.length : 0,
         inst: this.instanceCounts(),
         instLen: (this.instances() || []).length,
@@ -1363,7 +1457,7 @@
           mined: Array.from(this.mined).slice(-4000),
           minedAt: this.minedAt
         });
-      }, 3000);
+      }, 10000);
     }
     reset() { this.obs.clear(); this.stats.clear(); this.mined.clear(); this.minedAt = 0; this._appIndex = null; this._save(); }
     get size() { return this.obs.size; }
@@ -1855,13 +1949,16 @@
       const out = [];
       const seen = new Set();
       const add = (id, len, w, owned) => { if (!seen.has(id)) { seen.add(id); out.push({ id, len, w, owned }); } };
-      // Resume from anything already built in this save ("Zorbl" -> keep going).
-      for (const name of this.game.names()) {
+      // Resume from anything already built in this save ("Zorbl" -> keep going). Only quoted
+      // and decorated names can be resumed (the game keeps a separate list of those).
+      this.game.refresh();
+      for (const name of this.game.wrapped) {
         const p = Text.parse(name);
         if (!p.core || p.core.length < 2) continue;
-        if (p.w === 'plain' && p.core.length < goal.length) continue;
         if (ctx.exact ? goal.startsWith(p.core) : Text.startsCI(goal, p.core)) add(name, p.core.length, p.w, true);
       }
+      const whole = this.game.find(goal, ctx.exact ? 'exact' : 'case');
+      if (whole && Text.parse(whole).w === 'plain') add(whole, goal.length, 'plain', true);
       for (const cf of this._caseForms(goal, ctx.exact)) {
         for (const w of ['dq', 'cq']) {
           await this._check(ctx);
@@ -2459,9 +2556,13 @@
   /* ============================================================
    * Sound + notifications
    * ============================================================ */
+  let audioCtx = null;
   function chime(freqs, gap, vol) {
     try {
-      const ac = new (window.AudioContext || window.webkitAudioContext)();
+      // One audio context for the whole session; creating one per sound is slow.
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const ac = audioCtx;
+      if (ac.state === 'suspended') ac.resume().catch(() => {});
       const g = ac.createGain();
       g.gain.value = vol;
       g.connect(ac.destination);
@@ -2473,7 +2574,6 @@
         o.start(ac.currentTime + i * gap);
         o.stop(ac.currentTime + i * gap + gap + 0.02);
       });
-      setTimeout(() => { try { ac.close(); } catch (e) {} }, 1500);
     } catch (e) {}
   }
   const playDiscoverySound = () => chime([660, 880, 1100], 0.1, 0.15);
@@ -2610,7 +2710,6 @@
       this.pokedexList = [];
       this.pokedexIndex = 0;
       this.pokedexLoading = false;
-      this.saveSnapshot = null;
       this.saveSwitchAt = 0;
       this.lastRecipe = null;
       this.skipRequested = false;
@@ -2629,7 +2728,6 @@
       this.status('Loading learned data...', 's-run');
       await Promise.all([this.mem.load(), this.ib.load(), this.tools.load()]);
       this.game.refresh(true);
-      this.saveSnapshot = this._snapshot(this.game.names());
       this.observe();
       this.refreshSaveInfo();
       this.renderStats();
@@ -2744,6 +2842,7 @@
     saveExclude() {
       const lines = this.$('#ic-exclude').value.split('\n').map((s) => s.trim()).filter(Boolean);
       this.excludeSet = new Set(lines.map((s) => Text.soft(s)));
+      this._exploreNames = null;
       Store.set(KEYS.exclude, lines);
     }
     saveDrafts() { Store.set(KEYS.drafts, { target: this.$('#ic-target').value || '' }); }
@@ -2807,6 +2906,13 @@
     }
     async checkpoint(token) {
       if (token !== this.token || !this.running) throw new Cancelled();
+      // Long stretches answered from memory and cache never wait on anything, so give the page
+      // a moment every ~10 ms to draw and handle input; otherwise the game stutters.
+      if (now() - (this._sliceAt || 0) > 10) {
+        await yieldToPage();
+        this._sliceAt = now();
+        if (token !== this.token || !this.running) throw new Cancelled();
+      }
       while (this.paused) {
         await sleep(200);
         if (token !== this.token || !this.running) throw new Cancelled();
@@ -3057,7 +3163,11 @@
     async exploreLoop(token) {
       for (;;) {
         await this.checkpoint(token);
-        const names = this.game.names().filter((n) => !this.isAutoBlocked(n));
+        if (!this._exploreNames || this._exploreNames.v !== this.game.version) {
+          this.game.refresh();
+          this._exploreNames = { v: this.game.version, list: Array.from(this.game.exact).filter((n) => !this.isAutoBlocked(n)) };
+        }
+        const names = this._exploreNames.list;
         if (names.length < 2) { this.status('Need 2+ elements', 's-warn'); await sleep(2000); continue; }
         const pair = this.pickExplorePair(names);
         if (!pair) { this.status('Everything tried. Waiting for new items...', 's-run'); await sleep(3000); continue; }
@@ -3183,23 +3293,22 @@
     }
 
     /* ---------- save switching ---------- */
-    _snapshot(names) {
-      return { count: names.length, set: new Set(names) };
-    }
     refreshSaveInfo() {
       const el = this.$('#ic-save-info');
       if (!el) return;
-      const names = this.game.names().sort();
-      let h = 0;
-      for (const n of names) for (let j = 0; j < n.length; j++) h = (h * 31 + n.charCodeAt(j)) % 2147483647;
-      el.textContent = 'Save: ' + names.length + ' items | ' + ('000000' + h.toString(36)).slice(-6);
+      this.game.refresh();
+      el.textContent = 'Save: ' + this.game.exact.size + ' items | ' + ('000000' + this.game.hashSum.toString(36)).slice(-6);
     }
+    // Only a re-index (items disappeared or the list changed shape) can mean another save;
+    // new items at the end never do, so the common case costs nothing.
     checkSaveSwitch() {
-      const names = this.game.names();
-      const prev = this.saveSnapshot;
-      const next = this._snapshot(names);
-      this.saveSnapshot = next;
-      if (!prev || !names.length) return;
+      const ch = this.game.lastChange;
+      if (!ch || ch.kind !== 'rebuild' || ch.prev === this._checkedPrev) return;
+      this._checkedPrev = ch.prev;
+      const names = this.game.exact;
+      const prev = { count: ch.prev ? ch.prev.size : 0, set: ch.prev || new Set() };
+      const next = { count: names.size, set: names };
+      if (!names.size) return;
       // Growing from (almost) nothing is the game finishing its load, not a different save.
       if (prev.count < C.saveSwitch.minCount) return;
       if (now() - this.saveSwitchAt < C.saveSwitch.cooldown) return;
@@ -3222,8 +3331,9 @@
       this._observer = new MutationObserver(() => {
         clearTimeout(timer);
         timer = setTimeout(() => {
-          if (this.game.refresh()) {
-            this.checkSaveSwitch();
+          const changed = this.game.refresh();
+          this.checkSaveSwitch();
+          if (changed) {
             this.refreshSaveInfo();
             this.renderStatsSoon();
           }
@@ -3233,8 +3343,8 @@
     }
     rescanSave() {
       this.game._vm = null;
-      this.game.refresh(true);
-      this.saveSnapshot = this._snapshot(this.game.names());
+      this.game.refresh('full');
+      this._checkedPrev = this.game.lastChange && this.game.lastChange.prev;
       this.saveSwitchAt = now();
       this.refreshSaveInfo();
       this.renderStats();
@@ -3321,7 +3431,10 @@
     applyImport(d) {
       d = d || {};
       if (Array.isArray(d.triedKeys)) for (const k of d.triedKeys) this.mem.tried.add(k);
-      if (d.pairResults && typeof d.pairResults === 'object') for (const k of Object.keys(d.pairResults)) this.mem.pairs.set(k, d.pairResults[k]);
+      if (d.pairResults && typeof d.pairResults === 'object') {
+        for (const k of Object.keys(d.pairResults)) this.mem.pairs.set(k, d.pairResults[k]);
+        this.mem.pairsChanged();
+      }
       if (Array.isArray(d.badRecipePairs)) for (const k of d.badRecipePairs) this.mem.bad.add(k);
       else if (d.badRecipePairs && typeof d.badRecipePairs === 'object') for (const k of Object.keys(d.badRecipePairs)) this.mem.bad.add(k);
       if (d.recipeBank && typeof d.recipeBank === 'object') Object.assign(this.mem.recipeBank, d.recipeBank);
@@ -3474,11 +3587,16 @@
       const row = { type, msg, time: clock(), ts: now() };
       this.logRows.push(row);
       if (this.logRows.length > 400) this.logRows.splice(0, this.logRows.length - 400);
-      if (!this.logBody) return;
+      // The log window is drawn only while it's open (it's rebuilt from logRows when opened).
+      if (!this.logBody || !this.logPanel.classList.contains('show')) { this._logStale = true; return; }
+      this._logRow(row);
+    }
+    _logRow(row) {
+      const type = row.type;
       const entry = document.createElement('div');
       entry.className = 'log-entry t-' + type;
       const left = document.createElement('span');
-      left.textContent = msg;
+      left.textContent = row.msg;
       const time = document.createElement('span');
       time.className = 'log-time';
       time.textContent = row.time;
@@ -3600,7 +3718,15 @@
       $('#ic-pause').onclick = () => this.togglePause();
       $('#ic-skip').onclick = () => this.skipCurrent();
       $('#ic-exact').onclick = () => this.runExactCurrent();
-      $('#ic-logbtn').onclick = () => this.logPanel.classList.toggle('show');
+      $('#ic-logbtn').onclick = () => {
+        const show = !this.logPanel.classList.contains('show');
+        if (show && this._logStale) {
+          this._logStale = false;
+          this.logBody.textContent = '';
+          for (const r of this.logRows) this._logRow(r);
+        }
+        this.logPanel.classList.toggle('show', show);
+      };
       $('#ic-collapse').onclick = () => { this.opt.collapsed = !this.opt.collapsed; this.saveOptions(); this.applyOptionsToUI(); };
       $('#ic-speed').onchange = (e) => this.setSpeed(e.target.value);
       $('#ic-target').addEventListener('input', () => { this.saveDrafts(); this.updateLookup(); });

@@ -97,6 +97,14 @@ exist.
 
 ## Changelog
 
+- **6.6.0**: Much less lag, especially with big saves. With 40,000 items the page used to
+  be frozen 58% of the time during a run (worst freeze 0.5 s). Now it's 0%, and words are
+  made about 3 times faster. The script used to re-index your whole inventory twice per
+  craft; now it only indexes new items. Checking for a save switch no longer copies and
+  sorts the inventory after every craft. Long runs pause briefly every 10 ms so the game can
+  draw. Remembered pair results are saved in small batches instead of rewriting the whole
+  table every 15 seconds. The log window is only drawn while it's open, and discovery
+  sounds reuse one audio engine.
 - **6.5.0**: Gets past spots where every letter tool fails. Before, once every known way of
   adding the next letter had failed on the text it had, it waited and retried the same
   things forever (stuck at `"mr. Erem"`). Now later rounds search Infinibrowser for tools
@@ -182,6 +190,7 @@ node test/ui-smoke.js     # clicks through every panel control
 node test/keyboard.js     # typing in the panel isn't stolen by the game's search bar
 node test/connection.js   # blocked / "checking your browser" Infinibrowser, recovery, relay tab
 node test/run-sim.js --legacy Dragon   # the pre-2026 game client
+node test/perf.js         # lag with a 40,000-item save (main-thread freezes over 50 ms)
 ```
 
 The simulator imitates the current client: `window.IC` plus `.container`'s
