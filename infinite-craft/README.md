@@ -196,7 +196,7 @@ node test/perf.js         # lag with a 40,000-item save (main-thread freezes ove
 The simulator imitates the current client: `window.IC` plus `.container`'s
 `craft(instanceA, instanceB)`, which throws unless it's given real board instances.
 
-Latest results (v6.5.0):
+Latest results (v6.6.0):
 
 | Run | Result |
 |---|---|
@@ -204,6 +204,8 @@ Latest results (v6.5.0):
 | 50 random words, 12% tool noise | 50/50, avg 37 crafts per word (max 241) |
 | 50 random words, 30% tool noise | 50/50, avg 59 crafts per word (max 286) |
 | UI, keyboard and connection checks | all pass |
+| Lag with a 40,000-item save (4 words) | 0 freezes over 50 ms (6.5.0: page frozen 58% of the run, worst 0.5 s); 41 s instead of 126 s |
+| Same with 80,000 items | 0 freezes over 50 ms |
 
 These are simulator results. The real game's AI and Infinibrowser's data will behave
 differently, so expect different craft counts.
