@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Infinite Craft - Word Forge Pro (Auto Combiner v6)
 // @namespace    https://neal.fun/infinite-craft/
-// @version      6.8.2
+// @version      6.9.0
 // @description  Type any word and it gets crafted: looks it up on Infinibrowser and crafts the uploaded recipe (self-healing), or builds brand-new words letter by letter with text tools learned from Infinibrowser. No random combining. Keeps the National Pokedex queue, history and save tools.
 // @match        https://neal.fun/infinite-craft*
 // @match        https://infinibrowser.wiki/*
@@ -32,7 +32,7 @@
     } catch (e) {}
     return null;
   })();
-  const RELAY_REQ = 'icforge_relay_req', RELAY_RES = 'icforge_relay_res', RELAY_READY = 'icforge_relay_ready';
+  const RELAY_REQ = 'icforge_relay_req', RELAY_RES = 'icforge_relay_res', RELAY_READY = 'icforge_relay_ready', RELAY_CMD = 'icforge_relay_cmd';
 
   // On infinibrowser.wiki this script is only a relay: the game tab can ask it to fetch
   // Infinibrowser API data, which works there even when the game page itself is blocked
@@ -46,19 +46,50 @@
   function runInfinibrowserRelay() {
     const GAME = 'https://neal.fun';
     const checking = () => /just a moment/i.test(document.title || '');
+    // A note on this page so the player knows what this tab is for and what to do.
+    const banner = (text) => {
+      const show = () => {
+        let el = document.getElementById('icforge-relay-banner');
+        if (!el) {
+          el = document.createElement('div');
+          el.id = 'icforge-relay-banner';
+          el.style.cssText = 'position:fixed;left:50%;top:10px;transform:translateX(-50%);z-index:2147483647;max-width:min(560px,92vw);padding:9px 12px;border-radius:6px;border:1px solid #91a8c1;background:#fff;color:#040404;font:14px/1.35 Roboto,Arial,sans-serif;box-shadow:0 2px 12px rgba(0,0,0,.15);pointer-events:none;';
+          document.documentElement.appendChild(el);
+        }
+        el.textContent = '\u2692\uFE0F Word Forge: ' + text;
+      };
+      if (document.documentElement) show(); else document.addEventListener('DOMContentLoaded', show, { once: true });
+    };
+    // Infinibrowser answers the API with its "checking your browser" page once it wants a new
+    // check. The check only runs on a page load, so reload this tab (not too often).
+    const reloadForCheck = (asked) => {
+      let last = 0;
+      try { last = +sessionStorage.getItem('icforge_reload_at') || 0; } catch (e) {}
+      if (Date.now() - last < (asked ? 8000 : 30000)) return;
+      try { sessionStorage.setItem('icforge_reload_at', String(Date.now())); } catch (e) {}
+      banner('Infinibrowser wants to check your browser. Reloading this tab so the check can run...');
+      setTimeout(() => location.assign(location.origin + '/'), 1200);
+    };
+    const looksChallenged = (status, text) => (status === 403 || status === 503) && /just a moment|cf-chl|challenge/i.test(text || '');
     const fetchApi = async (path) => {
       if (typeof path !== 'string' || path.indexOf('/api/') !== 0) return { error: 'bad path' };
       try {
         const res = await fetch(location.origin + path, { headers: { Accept: 'application/json' }, credentials: 'same-origin' });
-        return { status: res.status, text: await res.text() };
+        const text = await res.text();
+        if (looksChallenged(res.status, text)) reloadForCheck(false);
+        return { status: res.status, text };
       } catch (err) {
         return { error: String((err && err.message) || err) };
       }
     };
+    if (checking()) banner('Infinibrowser is checking your browser. If it shows a box, click it. The game tab continues by itself once this page has loaded.');
+    else banner('This tab fetches recipes for Infinite Craft. Keep it open.');
     // Channel 1: postMessage with the game tab that opened this one.
     window.addEventListener('message', async (e) => {
       const d = e.data;
-      if (e.origin !== GAME || !d || d.icforge !== 'req') return;
+      if (e.origin !== GAME || !d) return;
+      if (d.icforge === 'reload') { reloadForCheck(true); return; }
+      if (d.icforge !== 'req') return;
       const out = Object.assign({ icforge: 'res', id: d.id }, await fetchApi(d.path));
       try { e.source.postMessage(out, e.origin); } catch (err) {}
     });
@@ -78,11 +109,14 @@
     if (GMS) {
       GMS.listen(RELAY_REQ, (name, oldV, newV) => handle(newV));
       handle(GMS.get(RELAY_REQ, []));
+      const started = Date.now();
+      GMS.listen(RELAY_CMD, (name, oldV, newV) => { if (newV && newV.cmd === 'reload' && newV.ts > started) reloadForCheck(true); });
     }
+    const page = Math.random().toString(36).slice(2);
     const announce = () => {
       if (checking()) return;
-      try { if (window.opener) window.opener.postMessage({ icforge: 'ready' }, GAME); } catch (e) {}
-      if (GMS) GMS.set(RELAY_READY, Date.now());
+      try { if (window.opener) window.opener.postMessage({ icforge: 'ready', page }, GAME); } catch (e) {}
+      if (GMS) GMS.set(RELAY_READY, { t: Date.now(), page });
     };
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', announce, { once: true });
     else announce();
@@ -92,7 +126,7 @@
   /* ============================================================
    * Config
    * ============================================================ */
-  const VERSION = '6.8.2';
+  const VERSION = '6.9.0';
 
   // Small settings stay in localStorage (same keys as v5.x so settings carry over).
   // Big learned data (tried pairs, pair results, Infinibrowser cache) lives in IndexedDB
@@ -170,7 +204,7 @@
       cacheMax: 6000,
       // After a first burst, stay under this many requests a minute: heavy use makes
       // Infinibrowser show its "checking your browser" page, which blocks the script.
-      perMinute: 100,
+      perMinute: 60,
       posTTL: 30 * 864e5,
       negTTL: 2 * 864e5,
       offlineCooldown: 45000
@@ -626,18 +660,26 @@
         if (d.icforge === 'ready') {
           this.win = e.source;
           this.ready = true;
+          this._page(d.page);
           this._changed();
         } else if (d.icforge === 'res') this._answer(d);
       });
       if (GMS) {
         GMS.listen(RELAY_RES, (name, oldV, newV) => { for (const r of newV || []) this._answer(r); });
-        GMS.listen(RELAY_READY, () => this._changed());
+        GMS.listen(RELAY_READY, (name, oldV, newV) => { this._page(newV && newV.page); this._changed(); });
       }
       setInterval(() => this._changed(), 3000);
     },
     _answer(d) {
       const cb = d && this.pending.get(d.id);
       if (cb) { this.pending.delete(d.id); cb(d); }
+    },
+    // The tab loaded a new page (e.g. after Infinibrowser's browser check): tell the app.
+    _page(id) {
+      if (!id || id === this.pageId) return;
+      const first = !this.pageId;
+      this.pageId = id;
+      if (!first && this.wasAlive) for (const f of this.listeners) { try { f(true); } catch (e) {} }
     },
     _changed() {
       const alive = this.alive();
@@ -648,9 +690,23 @@
       try { return !!(this.ready && this.win && !this.win.closed); } catch (e) { return false; }
     },
     storageAlive() {
-      try { return !!(GMS && Date.now() - (GMS.get(RELAY_READY, 0) || 0) < 7000); } catch (e) { return false; }
+      try {
+        const v = GMS && GMS.get(RELAY_READY, 0);
+        const t = typeof v === 'number' ? v : (v && v.t) || 0;
+        return !!(GMS && Date.now() - t < 7000);
+      } catch (e) { return false; }
     },
     alive() { return this.directAlive() || this.storageAlive(); },
+    // Ask the tab to reload (so Infinibrowser's browser check can run there).
+    reload() {
+      try { if (this.directAlive()) this.win.postMessage({ icforge: 'reload' }, 'https://infinibrowser.wiki'); } catch (e) {}
+      try { if (GMS) GMS.set(RELAY_CMD, { cmd: 'reload', ts: Date.now() }); } catch (e) {}
+    },
+    // Bring the tab to the front (only possible for a tab this page opened).
+    focus() {
+      try { if (this.win && !this.win.closed) { this.win.focus(); return true; } } catch (e) {}
+      return false;
+    },
     open() {
       this.ready = false;
       this.win = window.open('https://infinibrowser.wiki/', 'icforge-infinibrowser');
@@ -754,6 +810,7 @@
     // Why Infinibrowser can't be used right now, in plain words (or '' when it's fine).
     problem() {
       if (this.challengeAt && now() - this.challengeAt < C.ib.offlineCooldown) {
+        if (Relay.alive()) return 'Infinibrowser is checking your browser in its tab. Click "Go to Infinibrowser tab" and finish the check there (click the box if it shows one). The run continues by itself.';
         return 'Infinibrowser wants to check your browser first. Click "Open Infinibrowser tab", let it finish loading, keep that tab open, then press Start.';
       }
       if (this.offline) {
@@ -796,6 +853,7 @@
         }
         if ((res.status === 403 || res.status === 503) && looksLikeChallenge(res)) {
           this.challengeAt = now();
+          if (res.via === 'tab') Relay.reload();
           throw new Error('ib-challenge');
         }
         if (res.status >= 500) {
@@ -2708,10 +2766,10 @@
       '.ic-btn-danger{color:var(--wf-red);}',
       '.ic-btn-warn{color:var(--wf-orange);font-weight:600;}',
       '.ic-btn-row{display:flex;gap:5px;}.ic-btn-row .ic-btn{flex:1;min-width:0;}',
-      '.ic-badge{min-width:24px;height:26px;padding:0 7px;font-size:13px;display:flex;align-items:center;justify-content:center;}',
+      '.ic-badge{min-width:24px;height:28px;padding:0 8px;font-size:13px;display:flex;align-items:center;justify-content:center;}',
       '.ic-badge.pulse{animation:ic-pulse .6s ease;}',
       '@keyframes ic-pulse{0%{transform:scale(1)}50%{transform:scale(1.25)}100%{transform:scale(1)}}',
-      '.ic-minimize{cursor:pointer;font-size:16px;line-height:1;padding:4px 9px;}',
+      '.ic-minimize{cursor:pointer;font-size:15px;line-height:1;height:28px;min-width:30px;padding:0 7px;display:flex;align-items:center;justify-content:center;}',
       '.ic-body{display:flex;flex-direction:column;gap:8px;padding:10px;overflow-y:auto;}',
       '.ic-body::-webkit-scrollbar{width:6px;}.ic-body::-webkit-scrollbar-thumb{background:var(--wf-border);border-radius:3px;}',
       '.ic-section{display:flex;flex-direction:column;gap:5px;}',
@@ -2758,6 +2816,12 @@
       '.ic-details[open]>summary:before{transform:rotate(90deg);}',
       '.ic-details>.ic-dbody{display:flex;flex-direction:column;gap:6px;padding:4px 0 6px;}',
       '.ic-small{font-size:11.5px;color:var(--wf-muted);line-height:1.35;}',
+      '.ic-group{font-size:12px;color:var(--wf-muted);margin-top:6px;}',
+      '.ic-statline{display:flex;flex-wrap:wrap;gap:2px 12px;font-size:12px;color:var(--wf-muted);}',
+      '.ic-statline b{color:var(--wf-text);font-weight:600;}',
+      '.ic-btn-small{width:auto;align-self:flex-start;padding:5px 9px 4px;font-size:12.5px;}',
+      '.ic-now-skip{display:none;}',
+      '#ic-panel.running .ic-now-skip{display:block;}',
       '#ic-log{position:fixed;bottom:10px;right:10px;z-index:10014;width:380px;max-height:340px;background:var(--wf-bg);border:1px solid var(--wf-border);border-radius:calc(var(--wf-radius) + 3px);font-family:var(--wf-font);color:var(--wf-text);display:none;flex-direction:column;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08);}',
       '#ic-log.show{display:flex;}',
       '#ic-log .log-header{padding:8px 10px;border-bottom:1px solid var(--wf-border);font-size:14px;font-weight:600;display:flex;justify-content:space-between;align-items:center;gap:8px;}',
@@ -2838,7 +2902,7 @@
       this.status(this.game.hasApi() ? 'Ready. Type any word and press Start.' : 'Ready (game API not found yet; it may still be loading).', 's-ok');
       window.addEventListener('beforeunload', () => { this.mem.flush(); this.ib.save(); });
       Relay.init();
-      Relay.listeners.push(() => this.onRelayReady());
+      Relay.listeners.push((reloaded) => this.onRelayReady(reloaded));
       this.checkConnection();
       setInterval(() => this.renderInfo(), 3000);
     }
@@ -2858,7 +2922,14 @@
       return false;
     }
     openRelay() {
-      if (Relay.alive()) { this.status('The Infinibrowser tab is already connected.', 's-ok'); return; }
+      if (Relay.alive()) {
+        // Already open: if Infinibrowser is checking the browser there, reload it and bring it up.
+        if (this.ib.challengeAt) {
+          Relay.reload();
+          this.status(Relay.focus() ? 'Finish the check in the Infinibrowser tab; the run continues by itself.' : 'Switch to the Infinibrowser tab and finish its check; the run continues by itself.', 's-warn');
+        } else this.status('The Infinibrowser tab is already connected.', 's-ok');
+        return;
+      }
       if (!Relay.open()) {
         this.notice('Pop-up blocked', 'Your browser blocked the Infinibrowser tab. Allow pop-ups for neal.fun (icon in the address bar), then click the button again.', 's-err', this.relayAction());
         return;
@@ -2866,8 +2937,13 @@
       this.notice('Opening Infinibrowser...', 'Waiting for the Infinibrowser tab. If it shows "checking your browser", let it finish. Keep that tab open.', 's-warn');
       this.status('Waiting for the Infinibrowser tab...', 's-run');
     }
-    onRelayReady() {
+    onRelayReady(reloaded) {
       this.ib.resetHealth();
+      if (reloaded) {
+        this.log('plan', 'The Infinibrowser tab reloaded' + (this.running ? '; continuing' : ''));
+        if (!this.running) this.status('Infinibrowser tab ready again. Press Start.', 's-ok');
+        return;
+      }
       this.log('plan', 'Connected to Infinibrowser through its tab (keep it open)');
       if (!this.running) this.notice('Connected', 'Connected to Infinibrowser through its tab. Keep that tab open and press Start.', 's-ok');
       this.status('Connected to Infinibrowser through its tab. Press Start.', 's-ok');
@@ -2977,6 +3053,7 @@
     }
     updateLookup() {
       const link = this.$('#ic-lookup');
+      if (!link) return;
       const t = this.getTargets()[0];
       if (!t) { link.style.display = 'none'; return; }
       const v = Text.variants(t, false)[0] || t;
@@ -3023,6 +3100,7 @@
       }
     }
     syncButtons() {
+      this.panel.classList.toggle('running', !!this.running);
       this.$('#ic-start').disabled = this.running;
       this.$('#ic-pause').disabled = !this.running;
       this.$('#ic-pause').textContent = this.paused ? 'Resume' : 'Pause';
@@ -3618,7 +3696,7 @@
       btn.onclick = action.fn;
       btn.style.display = 'block';
     }
-    relayAction() { return { label: 'Open Infinibrowser tab', fn: () => this.openRelay() }; }
+    relayAction() { return { label: Relay.alive() ? 'Go to Infinibrowser tab' : 'Open Infinibrowser tab', fn: () => this.openRelay() }; }
     // Show a message in the card even when no run is going (connection problems, tests).
     notice(title, msg, cls, action) {
       this.showNow(title);
@@ -3649,8 +3727,9 @@
       s.level = (ctx.level && ctx.level.name) || '';
       s.crafts = ctx.crafts;
       // While Infinibrowser is unreachable the run keeps going; offer the fix right in the card.
-      const needsFix = !!this.ib.problem() && !Relay.alive();
-      if (needsFix !== !!this._fixShown) { this._fixShown = needsFix; this._setAction(needsFix ? this.relayAction() : null); }
+      const fix = this.ib.problem() && (!Relay.alive() || this.ib.challengeAt) ? this.relayAction() : null;
+      const label = fix ? fix.label : '';
+      if (label !== (this._fixShown || '')) { this._fixShown = label; this._setAction(fix); }
       if (this._nowTimer) return;
       this._nowTimer = setTimeout(() => { this._nowTimer = null; this._renderNow(); }, 80);
     }
@@ -3779,85 +3858,77 @@
       p.innerHTML = [
         '<div class="ic-header" id="ic-header">',
         '<span class="ic-title">⚒️ Word Forge</span>',
-        '<div style="display:flex;align-items:center;gap:6px;">',
-        '<div class="ic-badge" id="ic-badge" data-emoji="\u2728" title="New items this session">0</div>',
+        '<div style="display:flex;align-items:center;gap:5px;">',
+        '<div class="ic-badge" id="ic-badge" data-emoji="✨" title="New items this session">0</div>',
+        '<button class="ic-minimize" id="ic-logbtn" title="Log">📋</button>',
         '<button class="ic-minimize" id="ic-collapse" title="Collapse">−</button>',
         '</div></div>',
         '<div class="ic-body">',
-        '<div class="ic-section">',
-        '<div class="ic-section-title">Words to make (comma or newline separated)</div>',
-        '<textarea class="ic-textarea" id="ic-target" rows="2" placeholder="Anything: Dragon, Fire Truck, Zorblaxian, Hello World"></textarea>',
-        '<a class="ic-link" id="ic-lookup" href="#" target="_blank" rel="noopener" style="display:none;"></a>',
-        '</div>',
+        '<textarea class="ic-textarea" id="ic-target" rows="2" placeholder="Words to make, e.g. Dragon, Hello World, Zorblaxian"></textarea>',
         '<div class="ic-btn-row">',
-        '<button class="ic-btn ic-btn-start" id="ic-start" data-emoji="\u25B6\uFE0F">Start</button>',
-        '<button class="ic-btn" id="ic-pause" data-emoji="\u23F8\uFE0F" disabled>Pause</button>',
-        '<button class="ic-btn" id="ic-stop" data-emoji="\u23F9\uFE0F">Stop</button>',
+        '<button class="ic-btn ic-btn-start" id="ic-start" data-emoji="▶️">Start</button>',
+        '<button class="ic-btn" id="ic-pause" data-emoji="⏸️" disabled>Pause</button>',
+        '<button class="ic-btn" id="ic-stop" data-emoji="⏹️">Stop</button>',
         '</div>',
         '<div class="ic-now" id="ic-now">',
         '<div class="ic-now-target" id="ic-now-target"></div>',
         '<div class="ic-now-meta"><span class="ic-now-strategy" id="ic-now-strategy"></span><span id="ic-now-round"></span></div>',
         '<div class="ic-bar"><div id="ic-now-bar"></div></div>',
         '<div class="ic-now-msg" id="ic-now-msg"></div>',
-        '<button class="ic-btn ic-btn-warn" id="ic-now-action" style="display:none;margin-top:2px;"></button>',
+        '<button class="ic-btn ic-btn-warn" id="ic-now-action" style="display:none;"></button>',
+        '<button class="ic-btn ic-btn-small ic-now-skip" id="ic-skip" data-emoji="⏭️" title="Skip this word and go to the next one">Skip this word</button>',
         '</div>',
-        '<div class="ic-stats">',
-        '<div class="ic-stat" data-emoji="\u2728" title="New items this session"><span class="ic-stat-val" id="ic-s-new">0</span><span class="ic-stat-label">new items</span></div>',
-        '<div class="ic-stat" data-emoji="\uD83C\uDFC6" title="First discoveries this session"><span class="ic-stat-val" id="ic-s-disc">0</span><span class="ic-stat-label">first discoveries</span></div>',
-        '<div class="ic-stat" data-emoji="\uD83D\uDD28" title="Crafts this session"><span class="ic-stat-val" id="ic-s-crafts">0</span><span class="ic-stat-label">crafts</span></div>',
-        '<div class="ic-stat" data-emoji="\uD83C\uDFAF" title="Words from your list made this session"><span class="ic-stat-val" id="ic-s-forged">0</span><span class="ic-stat-label">words made</span></div>',
+        '<div class="ic-statline" title="This session">',
+        '<span><b id="ic-s-new">0</b> new</span><span><b id="ic-s-disc">0</b> first discoveries</span><span><b id="ic-s-crafts">0</b> crafts</span><span><b id="ic-s-forged">0</b> made</span>',
         '</div>',
-        '<div class="ic-btn-row">',
-        '<button class="ic-btn" id="ic-skip" data-emoji="\u23ED\uFE0F" title="Skip the current target and move on">Skip</button>',
-        '<button class="ic-btn" id="ic-exact" data-emoji="\uD83D\uDCDC" title="Make the first word only from a saved or Infinibrowser recipe (no letter building)">Recipe</button>',
-        '<button class="ic-btn" id="ic-logbtn" data-emoji="\uD83D\uDCCB">Log</button>',
-        '</div>',
-        '<details class="ic-details" data-sec="strategies" open><summary>Strategies</summary><div class="ic-dbody">',
-        chk('sIB', '1. Look it up on Infinibrowser', 'If someone already uploaded the word, craft its cheapest recipe; if a step fails, reroute through alternate recipes'),
-        chk('sCompound', '2. Phrases from words that exist', 'Fire Truck Monster = Fire Truck + Monster, only when both parts already exist'),
-        chk('sBuild', '3. Build new words letter by letter', 'For words nobody has made: quoted letters + text tools learned from Infinibrowser, then unquote'),
-        chk('relentless', 'Never give up (search deeper)', 'Keeps escalating recipe depth and tool search until every known route is used up'),
-        chk('exactSpelling', 'Exact capitalization too', 'Off: capitalization may differ ("fire truck" accepts "Fire Truck"); spelling, spaces and punctuation always have to match'),
+        '<div class="ic-status" id="ic-status">...</div>',
+        '<details class="ic-details" data-sec="settings"><summary>⚙️ Settings</summary><div class="ic-dbody">',
+        '<div class="ic-group">How it makes words</div>',
+        chk('sIB', 'Look it up on Infinibrowser first', 'If someone already uploaded the word, follow its recipe; if a step fails, reroute through other uploaded recipes'),
+        chk('sCompound', 'Combine words for phrases', 'Fire Truck Monster = Fire Truck + Monster'),
+        chk('sBuild', 'Build new words letter by letter', 'For words nobody has made: quoted letters + text tools learned from Infinibrowser, then unquote'),
+        chk('relentless', 'Never give up', 'Keep searching deeper and retrying instead of stopping'),
+        chk('exactSpelling', 'Exact capitalization', 'Off: capitalization may differ ("fire truck" accepts "Fire Truck"); spelling, spaces and punctuation always have to match'),
         '<div class="ic-btn-row" style="align-items:center;"><span class="ic-small" style="flex:0 0 auto;">Speed</span>',
         '<select class="ic-select" id="ic-speed"><option value="slow">Slow</option><option value="normal">Normal</option><option value="fast">Fast</option><option value="turbo">Turbo</option></select></div>',
-        '</div></details>',
-        '<details class="ic-details" data-sec="pokedex"><summary>National Pokedex</summary><div class="ic-dbody">',
-        '<div class="ic-btn-row"><input class="ic-input" id="ic-poke-start" placeholder="Start #" style="flex:1;" title="National Dex number to start from" />',
-        '<button class="ic-btn" id="ic-poke-load" style="flex:1.1;">Load Dex</button></div>',
-        '<div class="ic-btn-row"><button class="ic-btn" id="ic-poke-run" style="flex:1.4;">Run</button>',
-        '<button class="ic-btn ic-btn-danger" id="ic-poke-stop" style="flex:1;">Stop Dex</button>',
-        '<button class="ic-btn" id="ic-poke-reset" style="flex:1;">Reset</button></div>',
-        '<div class="ic-status" id="ic-poke-status" style="padding:5px;font-size:10px;">National Dex idle</div>',
-        '</div></details>',
-        '<details class="ic-details" data-sec="settings"><summary>Settings &amp; Data</summary><div class="ic-dbody">',
-        '<div class="ic-section-title">Never use these items</div>',
-        '<textarea class="ic-textarea" id="ic-exclude" rows="2" placeholder="One per line"></textarea>',
-        chk('autoSweep', 'Auto sweep board when laggy'),
-        chk('dragEnabled', 'Show crafts on the board (slower)'),
+        '<div class="ic-group">Board</div>',
         chk('soundEnabled', 'Sound on discovery'),
-        '<div class="ic-section-title" style="margin-top:4px;">Run a recipe</div>',
-        '<textarea class="ic-textarea" id="ic-recipe-text" rows="2" placeholder="Water + Fire = Steam&#10;Steam + Earth = Mud"></textarea>',
+        chk('autoSweep', 'Clear the board when it gets crowded'),
+        chk('dragEnabled', 'Show crafts on the board (slower)'),
+        '<div class="ic-group">Never use these items</div>',
+        '<textarea class="ic-textarea" id="ic-exclude" rows="2" placeholder="One per line"></textarea>',
+        '<div class="ic-group">Recipes</div>',
+        '<textarea class="ic-textarea" id="ic-recipe-text" rows="2" placeholder="Paste a recipe: Water + Fire = Steam"></textarea>',
         '<div class="ic-btn-row"><button class="ic-btn" id="ic-recipe-run">Run Recipe</button>',
-        '<button class="ic-btn" id="ic-copy-recipe" disabled title="Copy the recipe used for the last word made">Copy Last Recipe</button></div>',
+        '<button class="ic-btn" id="ic-copy-recipe" disabled title="Copy the recipe used for the last word made">Copy Last</button></div>',
+        '<button class="ic-btn" id="ic-exact" title="Make the first word in the list only from a saved or Infinibrowser recipe (no letter building)">Recipe Only (first word)</button>',
+        '<div class="ic-group">Infinibrowser</div>',
+        '<div class="ic-btn-row"><button class="ic-btn" id="ic-test-conn" title="Check every way of reaching Infinibrowser and show the results">Test Connection</button>',
+        '<button class="ic-btn" id="ic-open-relay" title="Open infinibrowser.wiki in a tab the script can fetch recipes through">Open Its Tab</button></div>',
+        '<div class="ic-small" id="ic-info"></div>',
+        '<div class="ic-group">Data</div>',
         '<div class="ic-btn-row"><button class="ic-btn" id="ic-export">Export</button>',
-        '<button class="ic-btn" id="ic-import">Import</button></div>',
+        '<button class="ic-btn" id="ic-import">Import</button>',
+        '<button class="ic-btn" id="ic-rebind-save" title="Read the inventory again (after switching saves)">Re-scan</button></div>',
         '<div class="ic-btn-row"><button class="ic-btn" id="ic-relearn" title="Re-survey Infinibrowser for text tools">Re-learn Tools</button>',
         '<button class="ic-btn ic-btn-danger" id="ic-clear">Clear Learned</button></div>',
-        '<div class="ic-btn-row"><button class="ic-btn" id="ic-test-conn" title="Check every way of reaching Infinibrowser and show the results">Test Connection</button>',
-        '<button class="ic-btn" id="ic-open-relay" title="Open infinibrowser.wiki in a tab the script can fetch recipes through">Open Infinibrowser Tab</button></div>',
-        '<div class="ic-btn-row"><button class="ic-btn" id="ic-debug" title="Copy what it is building, why it is stuck, and the last 2000 crafts it tried">Copy Debug Info</button></div>',
-        '<div class="ic-status" id="ic-save-info" style="padding:5px;font-size:10px;">Save: unknown</div>',
-        '<button class="ic-btn" id="ic-rebind-save">Re-scan Save</button>',
-        '<div class="ic-section-title" style="margin-top:4px;">Random exploring (optional)</div>',
+        '<div class="ic-small" id="ic-save-info">Save: unknown</div>',
+        '<button class="ic-btn" id="ic-debug" title="Copy what it is building, why it is stuck, and the last 2000 crafts it tried">Copy Debug Info</button>',
+        '<div class="ic-group">Random exploring</div>',
         '<div class="ic-small">Only runs if you press this. Start never combines things at random.</div>',
         chk('depthFirst', 'Try newest items first'),
         '<button class="ic-btn" id="ic-explore" title="Combine random items to find new ones (no target)">Explore Randomly</button>',
-        '<div class="ic-small" id="ic-info"></div>',
-        '<a class="ic-link" href="https://infinibrowser.wiki/" target="_blank" rel="noopener">infinibrowser.wiki</a>',
+        '<div class="ic-small" style="display:flex;justify-content:space-between;margin-top:4px;"><a class="ic-link" href="https://infinibrowser.wiki/" target="_blank" rel="noopener">infinibrowser.wiki</a><span>v' + VERSION + '</span></div>',
         '<input type="file" id="ic-import-file" accept="application/json,.json" style="display:none;" />',
         '</div></details>',
-        '<div class="ic-status" id="ic-status">...</div>',
-        '<div class="ic-small" style="text-align:right;opacity:.6;">v' + VERSION + '</div>',
+        '<details class="ic-details" data-sec="pokedex"><summary>📕 National Pokédex</summary><div class="ic-dbody">',
+        '<div class="ic-btn-row"><input class="ic-input" id="ic-poke-start" placeholder="Start #" style="flex:1;" title="National Dex number to start from" />',
+        '<button class="ic-btn" id="ic-poke-load" style="flex:1.1;">Load Dex</button></div>',
+        '<div class="ic-btn-row"><button class="ic-btn" id="ic-poke-run" style="flex:1.4;">Run</button>',
+        '<button class="ic-btn ic-btn-danger" id="ic-poke-stop" style="flex:1;">Stop</button>',
+        '<button class="ic-btn" id="ic-poke-reset" style="flex:1;">Reset</button></div>',
+        '<div class="ic-small" id="ic-poke-status">National Dex idle</div>',
+        '</div></details>',
         '</div>'
       ].join('');
       document.body.appendChild(p);

@@ -70,7 +70,7 @@ async function check(cond, label) {
   await check((await page.inputValue('#ic-exclude')).trim() === 'Lava', 'v5 exclude list restored');
   await check(await app(() => window._icAutoInstance.mem.result('Water', 'Fire')) === 'Steam', 'v5 pair results migrated');
   await check(await app(() => localStorage.getItem('icAutoPairResults')) === null, 'v5 pair blob removed from localStorage after IndexedDB migration');
-  await check(await page.isVisible('#ic-lookup'), 'Infinibrowser lookup link shown');
+  await check(!(await page.isVisible('details[data-sec="settings"] .ic-dbody')), 'settings start tucked away (panel shows only the essentials)');
 
   // Start via button, wait for completion.
   await page.click('#ic-start');
@@ -109,11 +109,11 @@ async function check(cond, label) {
   await page.click('#ic-collapse');
   await check(await page.isHidden('.ic-body'), 'collapse hides body');
   await page.click('#ic-collapse');
+  await page.click('details[data-sec="settings"] > summary');
   await page.selectOption('#ic-speed', 'slow');
   await check(await app(() => localStorage.getItem('icAutoSpeed')) === 'slow', 'speed saved');
 
-  // Pasted recipe.
-  await page.click('details[data-sec="settings"] > summary');
+  // Pasted recipe (settings are still open).
   await page.fill('#ic-recipe-text', world.lineage('Castle').map((s) => s[0] + ' + ' + s[1] + ' = ' + s[2]).join('\n'));
   await page.click('#ic-recipe-run');
   await page.waitForFunction(() => !window._icAutoInstance.running, null, { timeout: 60000 });

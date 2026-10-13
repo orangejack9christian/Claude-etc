@@ -6,6 +6,9 @@
 //  4. same through a GM_xmlhttpRequest shim (userscript manager path)
 //  5. game page blocked, "Open Infinibrowser tab" button -> relay through that tab (postMessage)
 //  6. Infinibrowser tab opened separately -> relay through shared userscript storage
+//  7. the Infinibrowser tab starts getting the "checking your browser" page mid-run -> the card
+//     says so with a "Go to Infinibrowser tab" button, the tab reloads itself so the check can
+//     run, and the run continues once it has passed
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -60,16 +63,18 @@ async function relayScenario(browser, channel) {
   console.log(channel === 'direct' ? 'Relay through the "Open Infinibrowser tab" button:' : 'Relay through shared userscript storage (tab opened separately):');
   const world = SimWorld.create({ seed: 'relay', noise: 0.1 });
   const context = await browser.newContext();
-  let relayHits = 0;
+  let relayHits = 0, relayLoads = 0;
+  const relay = { challenge: false };
   await context.route('https://infinibrowser.wiki/api/**', async (route) => {
     const origin = route.request().headers()['origin'] || '';
     if (origin === 'https://neal.fun') return route.abort('failed');
+    if (relay.challenge) return route.fulfill({ status: 403, contentType: 'text/html', body: CHALLENGE });
     relayHits++;
     const url = new URL(route.request().url());
     const res = world.api(url.pathname.replace(/^\/api/, ''), Object.fromEntries(url.searchParams.entries()));
     return route.fulfill({ status: res.status, contentType: 'application/json', body: JSON.stringify(res.body) });
   });
-  await context.route('https://infinibrowser.wiki/', (route) => route.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><html><head><title>Infinibrowser</title></head><body>Infinibrowser</body></html>' }));
+  await context.route('https://infinibrowser.wiki/', (route) => { relayLoads++; return route.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><html><head><title>Infinibrowser</title></head><body>Infinibrowser</body></html>' }); });
   await context.route('https://neal.fun/**', (route) => route.fulfill({ status: 200, contentType: 'text/html',
     body: '<!doctype html><html><head><meta charset="utf-8"></head><body><div class="container"><div class="items"></div></div></body></html>' }));
   let shim = '';
@@ -107,6 +112,22 @@ async function relayScenario(browser, channel) {
   await page.waitForFunction(() => !window._icAutoInstance.running, null, { timeout: 120000 });
   check(await page.evaluate(() => !!window._icAutoInstance.game.find('Zorblaxian', 'case')), 'makes a brand-new word with recipes fetched through the tab', await status(page));
   check(relayHits > 10, 'Infinibrowser data came through the relay tab (' + relayHits + ' requests)');
+  if (channel === 'direct') {
+    console.log('Browser check inside the Infinibrowser tab mid-run:');
+    relay.challenge = true;
+    const loadsBefore = relayLoads;
+    await page.fill('#ic-target', 'Qwxyzzyplonk');
+    await page.click('#ic-start');
+    const said = await page.waitForFunction(() => /checking your browser in its tab/i.test(document.querySelector('#ic-now-msg').textContent), null, { timeout: 60000 }).then(() => true, () => false);
+    check(said, 'the card says Infinibrowser is checking the browser in its tab', await page.textContent('#ic-now-msg'));
+    check(await page.isVisible('#ic-now-action') && /Go to Infinibrowser tab/.test(await page.textContent('#ic-now-action')), 'the card offers "Go to Infinibrowser tab"');
+    const reloaded = await page.waitForFunction((n) => window.__relayLoads > n, loadsBefore, { timeout: 1 }).then(() => true, () => false) ||
+      await (async () => { for (let i = 0; i < 40 && relayLoads <= loadsBefore; i++) await page.waitForTimeout(250); return relayLoads > loadsBefore; })();
+    check(reloaded, 'the Infinibrowser tab reloads itself so the check can run');
+    relay.challenge = false;
+    await page.waitForFunction(() => !window._icAutoInstance.running, null, { timeout: 120000 }).catch(() => {});
+    check(await page.evaluate(() => !!window._icAutoInstance.game.find('Qwxyzzyplonk', 'case')), 'the run continues by itself once the check has passed', await status(page));
+  }
   check(errors.length === 0, 'no page errors', errors.join(' | '));
   await context.close();
 }

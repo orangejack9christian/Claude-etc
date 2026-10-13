@@ -84,25 +84,35 @@ exist.
 
 ## Panel
 
-- **Words to make**: comma- or newline-separated queue.
-- **Start / Pause / Stop**, **Skip** (current target), **Exact Recipe** (saved or
-  Infinibrowser recipe only), **Log** (forge log; tick "every craft" for full detail).
-- **Strategies**: turn each step on or off, plus *Never give up* and
-  *Exact capitalization too*. By default capitalization may differ (`fire truck` accepts
-  `Fire Truck`), but letters, spaces and punctuation must match what you typed
-  (`Firetruck` and `fire-truck` don't count). Quoted text like `"fire truck"` never counts as
-  the plain word. The Pokedex queue keeps v5's looser matching, so `Mr Mime` = `Mr. Mime`.
-- **National Pokedex**: same queue as before, now using every strategy.
-- **Settings & Data**: exclude list, sweep, drag animation, sound, **Run a recipe** (paste
-  `A + B = C` lines), **Copy Last Recipe**, export/import, re-learn tools, clear learned data,
-  re-scan save, **Copy Debug Info** (what it's building, why it's stuck, and the last 2000
-  pairs it tried; paste that when reporting a word it can't make), and an optional
-  **Explore Randomly** button (the old v5 random combining).
-  Explore only runs if you press that button; **Start** with an empty box just asks for a
-  word.
+- **Main view**: the word box (comma- or newline-separated), **Start / Pause / Stop**, the
+  progress card (what it's doing, why it's waiting, a fix button when there's something to
+  do, and **Skip this word** while it runs) and one line of stats. 📋 in the header opens the
+  log (tick "every craft" for full detail), and − collapses the panel.
+- **⚙️ Settings**: which strategies to use, *Never give up*, *Exact capitalization*, speed,
+  board options, an exclude list, **Run Recipe** (paste `A + B = C` lines), **Copy Last**
+  recipe, **Recipe Only** for the first word, **Test Connection** and **Open Its Tab** for
+  Infinibrowser, export/import, re-scan, re-learn tools, clear learned data, **Copy Debug
+  Info** (what it's building, why it's stuck, and the last 2000 pairs it tried; paste that
+  when reporting a word it can't make), and an optional **Explore Randomly** button. Explore
+  only runs if you press it; **Start** with an empty box just asks for a word. By default
+  capitalization may differ (`fire truck` accepts `Fire Truck`), but letters, spaces and
+  punctuation must match what you typed. Quoted text like `"fire truck"` never counts as the
+  plain word.
+- **📕 National Pokédex**: same queue as before, using every strategy. It keeps v5's looser
+  matching, so `Mr Mime` = `Mr. Mime`.
+- The panel copies the game's font, colours and item style, and follows its dark mode.
 
 ## Changelog
 
+- **6.9.0**: A much simpler panel. The main view is just the word box, Start / Pause / Stop,
+  the progress card (with "Skip this word" while it runs) and one line of stats. Everything
+  else is under one Settings section (strategies, speed, board, recipes, Infinibrowser,
+  data, debug info, random exploring), and the log is a button in the header. When
+  Infinibrowser starts showing its "checking your browser" page in the Infinibrowser tab, that
+  tab now reloads itself so the check can run (with a note on the page saying what to do).
+  The card says what's happening and offers "Go to Infinibrowser tab", and the run continues by
+  itself as soon as the check has passed. Before, the card asked you to click a button that
+  wasn't there. Infinibrowser requests stay under 60 a minute after the first burst.
 - **6.8.2**: Attaching a separately built piece is tried once per spot per round, whatever
   the capitalization. Before, variants of the same text (`"ZoblivI"`, `"Zoblivi"`,
   `“zoblivi”`) each used up an attempt, so it never backed up to an earlier spot
