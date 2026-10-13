@@ -104,6 +104,13 @@ exist.
 
 ## Changelog
 
+- **6.9.1**: Words on Infinibrowser are made from their recipe again. It could remember a
+  wrong "not on Infinibrowser" answer for two days: any odd answer from Infinibrowser (a rate
+  limit, an error page) was saved as "not there", and from then on the word was built letter
+  by letter instead. Now only a real "not found" counts. The word you ask for is always looked
+  up fresh at the start of a run, and saved "not there" answers from older versions are
+  dropped. If Infinibrowser can't be checked, it looks the word up again instead of building
+  it another way.
 - **6.9.0**: A much simpler panel. The main view is just the word box, Start / Pause / Stop,
   the progress card (with "Skip this word" while it runs) and one line of stats. Everything
   else is under one Settings section (strategies, speed, board, recipes, Infinibrowser,

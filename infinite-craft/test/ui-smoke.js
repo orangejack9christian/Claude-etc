@@ -9,7 +9,7 @@ const { chromium } = require('playwright');
 const SimWorld = require('./sim-world.js');
 const { installGame } = require('./sim-page.js');
 
-const SCRIPT = fs.readFileSync(path.join(__dirname, '..', 'word-forge-pro.user.js'), 'utf8');
+const SCRIPT = fs.readFileSync(process.env.SIM_SCRIPT || path.join(__dirname, '..', 'word-forge-pro.user.js'), 'utf8');
 
 let failures = 0;
 let currentPage = null;
@@ -36,8 +36,13 @@ async function check(cond, label) {
   currentPage = page;
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
+  let dragonErrors = 1;   // the first lookup of Dragon gets an error answer (like a rate limit)
   await page.route('https://infinibrowser.wiki/api/**', async (route) => {
     const url = new URL(route.request().url());
+    if (url.pathname === '/api/item' && url.searchParams.get('id') === 'Dragon' && dragonErrors > 0) {
+      dragonErrors--;
+      return route.fulfill({ status: 403, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': '*' }, body: '{"error":"slow down"}' });
+    }
     const res = world.api(url.pathname.replace(/^\/api/, ''), Object.fromEntries(url.searchParams.entries()));
     await route.fulfill({ status: res.status, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify(res.body) });
   });
@@ -72,10 +77,15 @@ async function check(cond, label) {
   await check(await app(() => localStorage.getItem('icAutoPairResults')) === null, 'v5 pair blob removed from localStorage after IndexedDB migration');
   await check(!(await page.isVisible('details[data-sec="settings"] .ic-dbody')), 'settings start tucked away (panel shows only the essentials)');
 
+  // A remembered "Dragon is not on Infinibrowser" (from an old version or a bad answer) must not
+  // stop it from following Dragon's recipe.
+  await app(() => window._icAutoInstance.ib.mem.set('i:Dragon', { v: null, t: Date.now(), p: true }));
   // Start via button, wait for completion.
   await page.click('#ic-start');
   await page.waitForFunction(() => !window._icAutoInstance.running, null, { timeout: 60000 });
   await check(await app(() => !!window._icAutoInstance.game.find('Dragon', false)), 'Start button made Dragon');
+  await check(await app(() => window._icAutoInstance.logRows.some((r) => r.type === 'win' && /Made Dragon via Infinibrowser recipe/.test(r.msg))),
+    'Dragon came from its Infinibrowser recipe despite a stale "not there" answer and an error answer');
   await check(await app(() => window._icAutoInstance.stats.newWords) > 0 && await page.textContent('#ic-s-new') !== '0', 'new items are counted as discoveries');
   await check((await page.inputValue('#ic-target')).trim() === '', 'made target removed from the list');
   await check(!(await page.isDisabled('#ic-copy-recipe')), 'Copy Last Recipe enabled');

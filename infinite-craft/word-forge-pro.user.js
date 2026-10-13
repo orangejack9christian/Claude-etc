@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Infinite Craft - Word Forge Pro (Auto Combiner v6)
 // @namespace    https://neal.fun/infinite-craft/
-// @version      6.9.0
+// @version      6.9.1
 // @description  Type any word and it gets crafted: looks it up on Infinibrowser and crafts the uploaded recipe (self-healing), or builds brand-new words letter by letter with text tools learned from Infinibrowser. No random combining. Keeps the National Pokedex queue, history and save tools.
 // @match        https://neal.fun/infinite-craft*
 // @match        https://infinibrowser.wiki/*
@@ -126,7 +126,7 @@
   /* ============================================================
    * Config
    * ============================================================ */
-  const VERSION = '6.9.0';
+  const VERSION = '6.9.1';
 
   // Small settings stay in localStorage (same keys as v5.x so settings carry over).
   // Big learned data (tried pairs, pair results, Infinibrowser cache) lives in IndexedDB
@@ -782,7 +782,9 @@
     async load() {
       const raw = await KV.get('ib');
       if (raw && raw.v === 1 && Array.isArray(raw.e)) {
-        for (const [k, v, t] of raw.e) this.mem.set(k, { v, t, p: true });
+        // "Not on Infinibrowser" answers saved by another version may be wrong: drop them.
+        const keepMisses = raw.ver === VERSION;
+        for (const [k, v, t] of raw.e) if (v != null || keepMisses) this.mem.set(k, { v, t, p: true });
       }
     }
     _scheduleSave() {
@@ -793,7 +795,7 @@
       const entries = [];
       for (const [k, e] of this.mem) if (e.p) entries.push([k, e.v, e.t]);
       entries.sort((a, b) => b[2] - a[2]);
-      await KV.set('ib', { v: 1, e: entries.slice(0, C.ib.cacheMax) });
+      await KV.set('ib', { v: 1, ver: VERSION, e: entries.slice(0, C.ib.cacheMax) });
     }
     get offline() { return this.offlineAt && now() - this.offlineAt < C.ib.offlineCooldown; }
     _cached(key) {
@@ -818,7 +820,7 @@
       }
       return '';
     }
-    resetHealth() { this.offlineAt = 0; this.challengeAt = 0; this.failStreak = 0; }
+    resetHealth() { this.offlineAt = 0; this.challengeAt = 0; this.failStreak = 0; if (this.failedAt) this.failedAt.clear(); }
     // Returns parsed JSON, null for a definite "unknown element", throws when unreachable.
     async _fetchJSON(path, params) {
       if (!this.enabled) throw new Error('ib-disabled');
@@ -862,7 +864,9 @@
           await sleep(800);
           continue;
         }
-        if (res.status < 200 || res.status >= 300) { this.failStreak = 0; return null; }
+        // Anything else unexpected means "couldn't check", never "not there" (that answer is
+        // remembered, and a wrong one would hide a word that is on Infinibrowser).
+        if (res.status < 200 || res.status >= 300) { this.failStreak = 0; this.lastError = 'Infinibrowser answered HTTP ' + res.status; throw new Error('ib-' + res.status); }
         try {
           const json = JSON.parse(res.text);
           this.failStreak = 0;
@@ -872,7 +876,7 @@
           return json;
         } catch (e) {
           if (looksLikeChallenge(res)) { this.challengeAt = now(); throw new Error('ib-challenge'); }
-          return null;
+          throw new Error('ib-bad-response');
         }
       }
       throw new Error('ib-unavailable');
@@ -886,12 +890,20 @@
       const hit = this._cached(key);
       if (hit !== undefined) return Promise.resolve(hit);
       if (this.inflight.has(key)) return this.inflight.get(key);
+      // A request that just failed isn't sent again for a few seconds.
+      this.failedAt = this.failedAt || new Map();
+      const failed = this.failedAt.get(key);
+      if (failed && now() - failed < 10000) return Promise.reject(new Error('ib-recently-failed'));
       const p = (async () => {
         try {
           const json = await this._fetchJSON(path, params);
           const v = json == null ? null : transform(json);
           this._put(key, v, persist);
+          this.failedAt.delete(key);
           return v;
+        } catch (e) {
+          this.failedAt.set(key, now());
+          throw e;
         } finally {
           this.inflight.delete(key);
         }
@@ -990,6 +1002,7 @@
     clear() { this.mem.clear(); return KV.del('ib'); }
     // Drop cached "not on Infinibrowser" answers so newly uploaded items and recipes are seen.
     forgetMisses() { for (const [k, e] of Array.from(this.mem)) if (e.v == null) this.mem.delete(k); }
+    forgetMiss(id) { const e = this.mem.get('i:' + id); if (e && e.v == null) this.mem.delete('i:' + id); }
   }
 
   /* ============================================================
@@ -1875,9 +1888,13 @@
     async _wikiMatches(ctx) {
       const found = [];
       let unknown = false;
+      const fresh = !ctx.lookedUpFresh;
+      ctx.lookedUpFresh = true;
       for (const v of Text.variants(ctx.target, ctx.match)) {
         if (ctx.match !== 'loose' && !Text.same(v, ctx.target, ctx.match)) continue;
         await this._check(ctx);
+        // The word you asked for is always checked again (a remembered "not there" can be old).
+        if (fresh) this.ib.forgetMiss(v);
         const info = await this.ib.item(v);
         if (info === undefined) { unknown = true; continue; }
         if (info) found.push({ id: v, depth: typeof info.depth === 'number' ? info.depth : 1e6 });
@@ -1895,6 +1912,7 @@
       }
       this._say(ctx, 'Looking up "' + ctx.target + '" on Infinibrowser...');
       const { found, unknown } = await this._wikiMatches(ctx);
+      ctx.lookupUnknown = !found.length && unknown;
       if (!found.length) {
         const msg = unknown ? (this.ib.problem() || 'Infinibrowser could not be reached') : '"' + ctx.target + '" is not on Infinibrowser yet';
         this._note(ctx, msg, unknown ? 9 : 1);
@@ -2645,6 +2663,16 @@
         // game: reroute that recipe deeper (next round) before building the word another way.
         if (ctx.ibFound && !nested && li < last && !this.ib.problem()) {
           this.app.log('round', ctx.ibFound + ' is on Infinibrowser, but a step of its recipe gives something else in this game; rerouting it deeper before trying anything else');
+          continue;
+        }
+        if (ctx.lookupUnknown && !nested && li < last && !this.ib.problem()) {
+          this.app.log('round', "Couldn't check Infinibrowser for " + ctx.target + ' (' + (this.ib.lastError || 'no answer') + '); looking it up again before building it another way');
+          for (let t = 10; t > 0; t--) {
+            this._say(ctx, "Couldn't check Infinibrowser for " + ctx.target + ' yet. Looking it up again in ' + t + 's');
+            await sleep(1000);
+            await this._check(ctx);
+          }
+          ctx.lookedUpFresh = false;
           continue;
         }
         if (S.compound && (await this.viaCompound(ctx, false))) break;
