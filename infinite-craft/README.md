@@ -103,6 +103,11 @@ exist.
 
 ## Changelog
 
+- **6.8.2**: Attaching a separately built piece is tried once per spot per round, whatever
+  the capitalization. Before, variants of the same text (`"ZoblivI"`, `"Zoblivi"`,
+  `“zoblivi”`) each used up an attempt, so it never backed up to an earlier spot
+  (`"Zobliv"` + `“ion”`). New test: a spot where even attaching a piece fails, like the real
+  game's `“the_0b1ivi”` + `“on”` = `“on_the_0b1ivi”`.
 - **6.8.1**: A word that's on Infinibrowser is made from its Infinibrowser recipe. Before,
   when one step of that recipe gave something else in your game, it rerouted only a little,
   then switched to building the word letter by letter (for "Remove Underscore" that meant a

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Infinite Craft - Word Forge Pro (Auto Combiner v6)
 // @namespace    https://neal.fun/infinite-craft/
-// @version      6.8.1
+// @version      6.8.2
 // @description  Type any word and it gets crafted: looks it up on Infinibrowser and crafts the uploaded recipe (self-healing), or builds brand-new words letter by letter with text tools learned from Infinibrowser. No random combining. Keeps the National Pokedex queue, history and save tools.
 // @match        https://neal.fun/infinite-craft*
 // @match        https://infinibrowser.wiki/*
@@ -92,7 +92,7 @@
   /* ============================================================
    * Config
    * ============================================================ */
-  const VERSION = '6.8.1';
+  const VERSION = '6.8.2';
 
   // Small settings stay in localStorage (same keys as v5.x so settings carry over).
   // Big learned data (tried pairs, pair results, Infinibrowser cache) lives in IndexedDB
@@ -2226,8 +2226,13 @@
         // When no tool adds the next character at all ("0"), this is the way, from round 1. Also
         // from earlier points of the text, where the piece is longer: in the real game
         // "the_0b1" + “ivion” can work when every way of adding "on" to "the_0b1ivi" doesn't.
-        if (!ctx.spliceDepth && ctx.crafts - startCrafts < ctx.level.appendCrafts &&
+        // Once per spot per round, whatever the capitalization ("ZoblivI", "Zoblivi", “zoblivi” are
+        // the same spot), so the attempts reach earlier spots instead of repeating this one.
+        ctx.splicedAt = ctx.splicedAt || new Set();
+        const spot = cur.core.toLowerCase();
+        if (!ctx.spliceDepth && !ctx.splicedAt.has(spot) && ctx.crafts - startCrafts < ctx.level.appendCrafts &&
             (noTool || (ctx.levelIndex >= 1 && (ctx.splices || 0) < 4 + 2 * (ctx.round || 1)))) {
+          ctx.splicedAt.add(spot);
           if (!noTool) ctx.splices = (ctx.splices || 0) + 1;
           const sp = await this._spliceChunk(cur, goal, ctx, noTool);
           if (sp === true) return true;
@@ -2572,6 +2577,7 @@
         ctx.levelIndex = Math.min(li, last);
         ctx.li = li;
         ctx.cantMake = new Map();
+        ctx.splicedAt = new Set();
         ctx.level = this._levelFor(li);
         ctx.round = round + 1;
         const before = mark();
