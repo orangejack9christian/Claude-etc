@@ -76,8 +76,9 @@ function parseArgs(argv) {
     else if (a === '--no-space-tool') out.world.spaceTool = false;
     else if (a === '--words') out.world.extraWords = argv[++i].split(',');
     else if (a === '--phrase-rate') out.world.phraseRate = parseFloat(argv[++i]);
-    else if (a === '--jam') out.world.jam = argv[++i].split(',').map((x) => x.split(':'));
+    else if (a === '--jam') out.world.jam = argv[++i].split(',').map((x) => x.split(':'));   // erem:e  or  ivi:o:all
     else if (a === '--no-digit-tools') out.world.digitTools = false;
+    else if (a === '--stale') out.world.staleCount = parseInt(argv[++i], 10);
     else if (a === '--join-quoted') out.world.joinQuoted = true;
     else if (a === '--random') out.random = parseInt(argv[++i], 10) || 20;
     else out.targets.push(a);
@@ -222,6 +223,7 @@ async function runScenario(browser, scenario) {
     scenarios.push({ name: 'exact spelling', world: { seed: 'w3', noise: 0.15 }, targets: ['Zorblaxian', 'qUiRkY', 'Hello World'], timeout: args.timeout, exact: true });
     scenarios.push({ name: 'names with no space tool (like "Mr. Eremey Jeremy")', world: { seed: 'w5', noise: 0.12, spaceTool: false, phraseRate: 0.6, extraWords: ['Mr.', 'Jeremy', 'Ender', 'Steve'] }, targets: ['Mr. Eremey Jeremy', 'Ender Dragon', 'Steve Zorblax Jeremy'], timeout: args.timeout });
     scenarios.push({ name: 'a spot where adding a letter always fails (stuck at "mr. Erem")', world: { seed: 'w6', noise: 0.12, phraseRate: 0.6, extraWords: ['Mr.', 'Jeremy'], jam: [['erem', 'e']] }, targets: ['Mr. Eremey Jeremy', 'Zeremel'], timeout: args.timeout });
+    scenarios.push({ name: 'a spot where even attaching a piece fails (like "the_0b1ivi" + "on")', world: { seed: 'w8', noise: 0.12, jam: [['ivi', 'o', 'all']] }, targets: ['Zoblivion', 'Ivion Divine'], timeout: args.timeout });
     scenarios.push({ name: 'digits that no tool adds (like "The_0b1ivion")', world: { seed: 'w7', noise: 0.12, digitTools: false, joinQuoted: true, extraWords: ['0', '1', '2'] }, targets: ['The_0b1ivion', 'Code_101', 'Nob10rd'], timeout: args.timeout });
     scenarios.push({ name: 'older game client + GM_xmlhttpRequest', world: { seed: 'w4', noise: 0.12 }, targets: ['Dragon', 'Zorblaxian', 'Hello World'], timeout: args.timeout, legacy: true, gm: true });
   }

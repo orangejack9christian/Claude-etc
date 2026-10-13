@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Infinite Craft - Word Forge Pro (Auto Combiner v6)
 // @namespace    https://neal.fun/infinite-craft/
-// @version      6.7.0
+// @version      6.8.0
 // @description  Type any word and it gets crafted: looks it up on Infinibrowser and crafts the uploaded recipe (self-healing), or builds brand-new words letter by letter with text tools learned from Infinibrowser. No random combining. Keeps the National Pokedex queue, history and save tools.
 // @match        https://neal.fun/infinite-craft*
 // @match        https://infinibrowser.wiki/*
@@ -92,7 +92,7 @@
   /* ============================================================
    * Config
    * ============================================================ */
-  const VERSION = '6.7.0';
+  const VERSION = '6.8.0';
 
   // Small settings stay in localStorage (same keys as v5.x so settings carry over).
   // Big learned data (tried pairs, pair results, Infinibrowser cache) lives in IndexedDB
@@ -1718,7 +1718,19 @@
     }
 
     // ---------- Strategy 1: Infinibrowser lineages with self-healing ----------
+    // Top-level ensure() calls that fail are remembered for the rest of the round, so the search
+    // doesn't replay the same broken recipe every time it wants that item.
     async ensure(name, ctx, depth, trail) {
+      if (trail) return this._ensure(name, ctx, depth, trail);
+      const owned = this.game.find(name, true);
+      if (owned) return owned;
+      const memo = ctx.cantMake;
+      if (memo && memo.has(name) && memo.get(name) >= depth) return null;
+      const got = await this._ensure(name, ctx, depth, null);
+      if (!got && memo && !this.ib.problem()) memo.set(name, Math.max(depth, memo.has(name) ? memo.get(name) : -1));
+      return got;
+    }
+    async _ensure(name, ctx, depth, trail) {
       const owned = this.game.find(name, true);
       if (owned) return owned;
       if (depth < 0) return null;
@@ -1764,7 +1776,7 @@
         if (res === r || this.game.has(r, true)) continue;
         // Infinibrowser's step didn't reproduce in this game; find another route to r.
         this.mem.markBad(r, ia, ib);
-        this.app.log('fix', ia + ' + ' + ib + ' gave ' + (res || 'nothing') + ', expected ' + r + '; rerouting');
+        this.app.logOnce('fix', ia + ' + ' + ib + ' gave ' + (res || 'nothing') + ', expected ' + r + '; rerouting');
         if (!(await this._viaRecipes(r, ctx, depth - 1, trail))) return false;
       }
       return true;
@@ -2210,10 +2222,11 @@
         // Still stuck at the front line: build part of what's left as its own quoted piece and
         // attach it in one craft ("mr. Erem" + “ey Jeremy” -> “mr. Eremey Jeremy”), so the pair
         // that keeps failing isn't needed at all.
-        // When no tool adds the next character at all ("0"), this is the way, from round 1.
+        // When no tool adds the next character at all ("0"), this is the way, from round 1. Also
+        // from earlier points of the text, where the piece is longer: in the real game
+        // "the_0b1" + “ivion” can work when every way of adding "on" to "the_0b1ivi" doesn't.
         if (!ctx.spliceDepth && ctx.crafts - startCrafts < ctx.level.appendCrafts &&
-            (noTool || (ctx.levelIndex >= 1 && (ctx.splices || 0) < 2 + (ctx.round || 1) &&
-              (!ctx.best || cur.core.length >= ctx.best.core.length - 1)))) {
+            (noTool || (ctx.levelIndex >= 1 && (ctx.splices || 0) < 4 + 2 * (ctx.round || 1)))) {
           if (!noTool) ctx.splices = (ctx.splices || 0) + 1;
           const sp = await this._spliceChunk(cur, goal, ctx, noTool);
           if (sp === true) return true;
@@ -2264,7 +2277,7 @@
       const sub = {
         target: Text.wrap(core, 'cq'), match: ctx.match, exact: ctx.exact, token: ctx.token, nest: ctx.nest + 1,
         crafts: 0, path: ctx.path, strategy: ctx.strategy, level: ctx.level, levelIndex: ctx.levelIndex, li: ctx.li,
-        round: ctx.round, notes: [], spliceDepth: 1, preferW: 'cq', label: 'Piece to attach'
+        round: ctx.round, notes: [], spliceDepth: 1, preferW: 'cq', label: 'Piece to attach', cantMake: ctx.cantMake
       };
       // A piece gets a share of the round's budget, so one stubborn piece can't eat the round.
       sub.level = Object.assign({}, ctx.level, { appendCrafts: Math.max(60, Math.ceil(ctx.level.appendCrafts / 4)) });
@@ -2557,6 +2570,7 @@
         const li = startLevel + round;
         ctx.levelIndex = Math.min(li, last);
         ctx.li = li;
+        ctx.cantMake = new Map();
         ctx.level = this._levelFor(li);
         ctx.round = round + 1;
         const before = mark();
@@ -2650,6 +2664,9 @@
   /* ============================================================
    * CSS
    * ============================================================ */
+  // Styled after Infinite Craft itself: white, thin grey borders, rounded item "chips" with an
+  // emoji, and the game's light-blue hover. App.syncTheme() copies the game's real font, colours
+  // and dark mode from the page, so the panel keeps matching it.
   function injectCSS() {
     const id = 'ic-auto-css';
     const old = document.getElementById(id);
@@ -2657,82 +2674,92 @@
     const s = document.createElement('style');
     s.id = id;
     s.textContent = [
-      ':root{--ic-bg:#1a1a2e;--ic-bg2:#16213e;--ic-bg3:#0f3460;--ic-surface:#1e2746;--ic-surface2:#253256;--ic-border:#2a3a5c;--ic-text:#e0e0e0;--ic-text2:#8892b0;--ic-accent:#64ffda;--ic-accent2:#7c4dff;--ic-red:#ff5252;--ic-orange:#ffab40;--ic-green:#69f0ae;--ic-blue:#448aff;--ic-yellow:#ffd740;--ic-radius:10px;--ic-font:"Inter","SF Pro Display",-apple-system,system-ui,sans-serif;}',
-      '#ic-panel{position:fixed;top:10px;left:10px;z-index:10010;width:284px;max-height:calc(100vh - 20px);background:var(--ic-bg);border:1px solid var(--ic-border);border-radius:var(--ic-radius);font-family:var(--ic-font);font-size:12px;color:var(--ic-text);box-shadow:0 8px 32px rgba(0,0,0,.4);display:flex;flex-direction:column;overflow:hidden;}',
+      '#ic-panel,#ic-log{--wf-bg:#fff;--wf-chip:#fff;--wf-text:#040404;--wf-muted:#8d8d8d;--wf-border:#c8c8c8;--wf-hover-tint:#d6fcff;--wf-hover-border:#91a8c1;--wf-font:Roboto,"Helvetica Neue",Arial,sans-serif;--wf-radius:5px;--wf-green:#24914a;--wf-orange:#c46a00;--wf-red:#cf3a2e;--wf-blue:#3d6dab;--wf-track:#ececec;}',
+      '#ic-panel.wf-dark,#ic-log.wf-dark{--wf-bg:#1b1b1b;--wf-chip:#262626;--wf-text:#f1f1f1;--wf-muted:#a3a3a3;--wf-border:#4a4a4a;--wf-hover-tint:#24454e;--wf-hover-border:#6f95ad;--wf-green:#62d283;--wf-orange:#ffad42;--wf-red:#ff6d61;--wf-blue:#8ab8ff;--wf-track:#3a3a3a;}',
+      '#ic-panel{position:fixed;top:10px;left:10px;z-index:10010;width:300px;max-height:calc(100vh - 20px);background:var(--wf-bg);border:1px solid var(--wf-border);border-radius:calc(var(--wf-radius) + 3px);font-family:var(--wf-font);font-size:13px;line-height:1.3;color:var(--wf-text);box-shadow:0 2px 12px rgba(0,0,0,.08);display:flex;flex-direction:column;overflow:hidden;}',
+      '#ic-panel *,#ic-log *{box-sizing:border-box;}',
       '#ic-panel.collapsed{width:auto;}',
       '#ic-panel.collapsed .ic-body{display:none;}',
       '#ic-panel.collapsed .ic-title{display:none;}',
-      '.ic-header{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:9px 10px;background:linear-gradient(135deg,var(--ic-bg2),var(--ic-bg3));border-bottom:1px solid var(--ic-border);cursor:move;user-select:none;}',
-      '.ic-title{font-weight:700;font-size:13px;letter-spacing:.4px;background:linear-gradient(90deg,var(--ic-accent),var(--ic-accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent;white-space:nowrap;}',
-      '.ic-badge{min-width:20px;height:20px;border-radius:10px;background:var(--ic-accent2);color:#fff;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 5px;}',
-      '.ic-badge.pulse{animation:ic-pulse .6s ease;}',
-      '@keyframes ic-pulse{0%{transform:scale(1)}50%{transform:scale(1.35)}100%{transform:scale(1)}}',
-      '.ic-minimize{background:none;border:none;color:var(--ic-text2);cursor:pointer;font-size:18px;padding:2px 8px;border-radius:4px;line-height:1;}',
-      '.ic-minimize:hover{color:var(--ic-accent);background:var(--ic-surface2);}',
-      '.ic-body{display:flex;flex-direction:column;gap:7px;padding:10px;overflow-y:auto;}',
-      '.ic-body::-webkit-scrollbar{width:4px;}.ic-body::-webkit-scrollbar-thumb{background:var(--ic-border);border-radius:2px;}',
-      '.ic-section{display:flex;flex-direction:column;gap:5px;}',
-      '.ic-section-title{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--ic-text2);font-weight:600;}',
-      '.ic-input,.ic-select,.ic-textarea{width:100%;padding:7px 9px;background:var(--ic-surface);border:1px solid var(--ic-border);border-radius:6px;color:var(--ic-text);font-size:12px;font-family:var(--ic-font);box-sizing:border-box;outline:none;}',
-      '.ic-input:focus,.ic-select:focus,.ic-textarea:focus{border-color:var(--ic-accent);}',
-      '.ic-select{cursor:pointer;}',
-      '.ic-select option{background:var(--ic-bg);color:var(--ic-text);}',
-      '.ic-textarea{resize:vertical;min-height:38px;font-size:11.5px;line-height:1.35;}',
-      '.ic-btn{width:100%;padding:7px 6px;border:none;border-radius:6px;font-size:12px;font-weight:600;font-family:var(--ic-font);cursor:pointer;text-align:center;}',
-      '.ic-btn:active{transform:scale(.97);}',
+      '#ic-panel.collapsed .ic-header{border-bottom:none;}',
+      '.ic-header{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;border-bottom:1px solid var(--wf-border);cursor:move;user-select:none;}',
+      '.ic-title{font-weight:600;font-size:15px;white-space:nowrap;}',
+      // Everything clickable looks like an Infinite Craft item.
+      '.ic-btn,.ic-minimize,.ic-badge,.ic-stat,.ic-now-target{background:var(--wf-chip);border:1px solid var(--wf-border);border-radius:var(--wf-radius);color:var(--wf-text);font-family:var(--wf-font);}',
+      '.ic-btn{width:100%;padding:8px 8px 7px;font-size:14px;line-height:1.1;cursor:pointer;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:background .15s linear,border-color .15s linear;}',
+      '.ic-btn:hover:not(:disabled),.ic-minimize:hover,.ic-badge.has-new{background:linear-gradient(0deg,var(--wf-hover-tint),var(--wf-chip) 90%);border-color:var(--wf-hover-border);}',
+      '.ic-btn:active:not(:disabled){transform:scale(.97);}',
       '.ic-btn:disabled{opacity:.45;cursor:default;}',
-      '.ic-btn-start{background:linear-gradient(135deg,#00c853,#69f0ae);color:#1a1a2e;}',
-      '.ic-btn-stop{background:linear-gradient(135deg,#ff1744,#ff5252);color:#fff;}',
-      '.ic-btn-pause{background:linear-gradient(135deg,#2979ff,#448aff);color:#fff;}',
-      '.ic-btn-warn{background:linear-gradient(135deg,#ff6d00,#ffab40);color:#1a1a2e;}',
-      '.ic-btn-ghost{background:var(--ic-surface);color:var(--ic-text2);border:1px solid var(--ic-border);}',
-      '.ic-btn-ghost:hover{border-color:var(--ic-accent);color:var(--ic-accent);}',
-      '.ic-btn-row{display:flex;gap:4px;}.ic-btn-row .ic-btn{flex:1;}',
-      '.ic-check{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--ic-text2);cursor:pointer;}',
-      '.ic-check input{accent-color:var(--ic-accent);margin:0;}',
-      '.ic-stats{display:grid;grid-template-columns:1fr 1fr;gap:4px;text-align:center;}',
-      '.ic-stat{background:var(--ic-surface);border-radius:6px;padding:5px 4px;border:1px solid transparent;}',
-      '.ic-stat-val{font-size:15px;font-weight:700;color:var(--ic-accent);}',
-      '.ic-stat-label{font-size:9px;color:var(--ic-text2);text-transform:uppercase;letter-spacing:.5px;}',
-      '.ic-stat.green{border-color:var(--ic-green);}.ic-stat.green .ic-stat-val,.ic-stat.green .ic-stat-label{color:var(--ic-green);}',
-      '.ic-stat.orange{border-color:var(--ic-orange);}.ic-stat.orange .ic-stat-val,.ic-stat.orange .ic-stat-label{color:var(--ic-orange);}',
-      '.ic-status{padding:7px;border-radius:6px;background:var(--ic-surface);text-align:center;font-size:11px;line-height:1.35;word-break:break-word;color:var(--ic-text2);border:1px solid var(--ic-border);}',
-      '.ic-status.s-run{color:var(--ic-blue);border-color:var(--ic-blue);}',
-      '.ic-status.s-stop{color:var(--ic-red);border-color:var(--ic-red);}',
-      '.ic-status.s-ok{color:var(--ic-green);border-color:var(--ic-green);}',
-      '.ic-status.s-err{color:var(--ic-red);border-color:var(--ic-red);font-weight:700;}',
-      '.ic-status.s-warn{color:var(--ic-orange);border-color:var(--ic-orange);}',
-      '.ic-now{background:var(--ic-surface);border:1px solid var(--ic-border);border-radius:6px;padding:7px 8px;display:none;flex-direction:column;gap:4px;}',
+      '#ic-panel [data-emoji]::before{content:attr(data-emoji);margin-right:5px;}',
+      '.ic-btn-start{font-weight:600;}',
+      '.ic-btn-danger{color:var(--wf-red);}',
+      '.ic-btn-warn{color:var(--wf-orange);font-weight:600;}',
+      '.ic-btn-row{display:flex;gap:5px;}.ic-btn-row .ic-btn{flex:1;min-width:0;}',
+      '.ic-badge{min-width:24px;height:26px;padding:0 7px;font-size:13px;display:flex;align-items:center;justify-content:center;}',
+      '.ic-badge.pulse{animation:ic-pulse .6s ease;}',
+      '@keyframes ic-pulse{0%{transform:scale(1)}50%{transform:scale(1.25)}100%{transform:scale(1)}}',
+      '.ic-minimize{cursor:pointer;font-size:16px;line-height:1;padding:4px 9px;}',
+      '.ic-body{display:flex;flex-direction:column;gap:8px;padding:10px;overflow-y:auto;}',
+      '.ic-body::-webkit-scrollbar{width:6px;}.ic-body::-webkit-scrollbar-thumb{background:var(--wf-border);border-radius:3px;}',
+      '.ic-section{display:flex;flex-direction:column;gap:5px;}',
+      '.ic-section-title{font-size:12px;color:var(--wf-muted);}',
+      '.ic-input,.ic-select,.ic-textarea{width:100%;padding:8px 10px;background:var(--wf-chip);border:1px solid var(--wf-border);border-radius:var(--wf-radius);color:var(--wf-text);font-size:14px;font-family:var(--wf-font);outline:none;}',
+      '.ic-input:focus,.ic-select:focus,.ic-textarea:focus{border-color:var(--wf-hover-border);}',
+      '.ic-input::placeholder,.ic-textarea::placeholder{color:var(--wf-muted);}',
+      '.ic-select{cursor:pointer;padding:6px 8px;}',
+      '.ic-select option{background:var(--wf-chip);color:var(--wf-text);}',
+      '.ic-textarea{resize:vertical;min-height:44px;line-height:1.35;}',
+      '.ic-check{display:flex;align-items:center;gap:7px;font-size:13px;cursor:pointer;}',
+      '.ic-check input{accent-color:var(--wf-hover-border);margin:0;}',
+      // Stats wrap like items in the game's sidebar.
+      '.ic-stats{display:flex;flex-wrap:wrap;gap:5px;}',
+      '.ic-stat{flex:0 0 auto;max-width:100%;padding:6px 8px 5px;display:flex;align-items:baseline;gap:5px;font-size:13px;white-space:nowrap;overflow:hidden;}',
+      '.ic-stat-val{font-weight:600;}',
+      '.ic-stat-label{color:var(--wf-muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;}',
+      '.ic-status{padding:1px 2px;font-size:12.5px;line-height:1.35;word-break:break-word;color:var(--wf-muted);}',
+      '.ic-status.s-run{color:var(--wf-blue);}',
+      '.ic-status.s-stop{color:var(--wf-red);}',
+      '.ic-status.s-ok{color:var(--wf-green);}',
+      '.ic-status.s-err{color:var(--wf-red);font-weight:600;}',
+      '.ic-status.s-warn{color:var(--wf-orange);}',
+      '.ic-now{background:var(--wf-chip);border:1px solid var(--wf-border);border-radius:var(--wf-radius);padding:8px;display:none;flex-direction:column;gap:6px;}',
       '.ic-now.show{display:flex;}',
-      '.ic-now.done-ok{border-color:var(--ic-green);}.ic-now.done-ok .ic-now-strategy{color:var(--ic-green);}',
-      '.ic-now.done-bad{border-color:var(--ic-orange);}.ic-now.done-bad .ic-now-strategy{color:var(--ic-orange);}',
-      '.ic-now-target{font-weight:700;color:var(--ic-text);font-size:12.5px;word-break:break-word;}',
-      '.ic-now-meta{display:flex;justify-content:space-between;gap:6px;font-size:10px;color:var(--ic-text2);}',
-      '.ic-now-strategy{color:var(--ic-accent);font-weight:600;}',
-      '.ic-now-msg{font-size:11px;color:var(--ic-text2);word-break:break-word;min-height:14px;}',
-      '.ic-bar{height:4px;background:var(--ic-bg2);border-radius:2px;overflow:hidden;}',
-      '.ic-bar>div{height:100%;width:0;background:linear-gradient(90deg,var(--ic-accent),var(--ic-accent2));transition:width .25s;}',
-      '.ic-link{font-size:11px;color:var(--ic-accent);text-decoration:none;}',
+      '.ic-now.done-ok{border-color:var(--wf-green);}',
+      '.ic-now.done-bad{border-color:var(--wf-orange);}',
+      '.ic-now-target{align-self:flex-start;max-width:100%;font-size:15px;padding:7px 8px 6px;word-break:break-word;}',
+      '.ic-now-target::before{content:"🎯";margin-right:5px;}',
+      '.ic-now.done-ok .ic-now-target::before{content:"✅";}',
+      '.ic-now.done-bad .ic-now-target::before{content:"⏳";}',
+      '.ic-now-meta{display:flex;justify-content:space-between;gap:6px;font-size:11.5px;color:var(--wf-muted);}',
+      '.ic-now-strategy{color:var(--wf-text);font-weight:500;}',
+      '.ic-now.done-ok .ic-now-strategy{color:var(--wf-green);}.ic-now.done-bad .ic-now-strategy{color:var(--wf-orange);}',
+      '.ic-now-msg{font-size:12.5px;word-break:break-word;min-height:15px;}',
+      '.ic-bar{height:4px;background:var(--wf-track);border-radius:2px;overflow:hidden;}',
+      '.ic-bar>div{height:100%;width:0;background:var(--wf-hover-border);transition:width .25s;}',
+      '.ic-link{font-size:12px;color:var(--wf-blue);text-decoration:none;}',
       '.ic-link:hover{text-decoration:underline;}',
-      '.ic-details{border:1px solid var(--ic-border);border-radius:6px;background:rgba(255,255,255,.015);}',
-      '.ic-details>summary{cursor:pointer;padding:6px 8px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--ic-text2);font-weight:600;list-style:none;}',
+      '.ic-details{border-top:1px solid var(--wf-border);}',
+      '.ic-details>summary{cursor:pointer;padding:8px 2px 4px;font-size:13px;font-weight:500;list-style:none;user-select:none;}',
       '.ic-details>summary::-webkit-details-marker{display:none;}',
-      '.ic-details>summary:before{content:"\\25b8";display:inline-block;margin-right:6px;transition:transform .2s;}',
+      '.ic-details>summary:before{content:"\\25b8";display:inline-block;margin-right:7px;color:var(--wf-muted);transition:transform .2s;}',
       '.ic-details[open]>summary:before{transform:rotate(90deg);}',
-      '.ic-details>.ic-dbody{display:flex;flex-direction:column;gap:5px;padding:2px 8px 8px;}',
-      '.ic-small{font-size:10px;color:var(--ic-text2);line-height:1.35;}',
-      '#ic-log{position:fixed;bottom:10px;right:10px;z-index:10014;width:360px;max-height:320px;background:var(--ic-bg);border:1px solid var(--ic-border);border-radius:var(--ic-radius);font-family:var(--ic-font);display:none;flex-direction:column;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.4);}',
+      '.ic-details>.ic-dbody{display:flex;flex-direction:column;gap:6px;padding:4px 0 6px;}',
+      '.ic-small{font-size:11.5px;color:var(--wf-muted);line-height:1.35;}',
+      '#ic-log{position:fixed;bottom:10px;right:10px;z-index:10014;width:380px;max-height:340px;background:var(--wf-bg);border:1px solid var(--wf-border);border-radius:calc(var(--wf-radius) + 3px);font-family:var(--wf-font);color:var(--wf-text);display:none;flex-direction:column;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08);}',
       '#ic-log.show{display:flex;}',
-      '#ic-log .log-header{padding:7px 10px;background:var(--ic-bg2);border-bottom:1px solid var(--ic-border);font-size:11px;font-weight:700;color:var(--ic-accent);display:flex;justify-content:space-between;align-items:center;gap:8px;}',
-      '#ic-log .log-header label{font-weight:400;color:var(--ic-text2);display:flex;align-items:center;gap:4px;}',
-      '#ic-log .log-header button{background:none;border:none;color:var(--ic-text2);cursor:pointer;font-size:14px;}',
-      '#ic-log .log-body{flex:1;overflow-y:auto;padding:6px;font-size:11px;}',
-      '#ic-log .log-entry{padding:3px 6px;border-radius:4px;margin-bottom:1px;display:flex;justify-content:space-between;gap:8px;color:var(--ic-text2);}',
-      '#ic-log .log-entry:hover{background:var(--ic-surface);}',
-      '#ic-log .log-entry .log-time{font-size:10px;opacity:.6;white-space:nowrap;}',
-      '#ic-log .t-new{color:var(--ic-green);}#ic-log .t-first{color:var(--ic-orange);font-weight:700;}',
-      '#ic-log .t-win{color:var(--ic-accent);font-weight:700;}#ic-log .t-fix{color:var(--ic-yellow);}',
-      '#ic-log .t-fail{color:var(--ic-red);}#ic-log .t-round{color:var(--ic-blue);}#ic-log .t-diag{color:var(--ic-text);}',
+      '#ic-log .log-header{padding:8px 10px;border-bottom:1px solid var(--wf-border);font-size:14px;font-weight:600;display:flex;justify-content:space-between;align-items:center;gap:8px;}',
+      '#ic-log .log-header label{font-weight:400;font-size:12px;color:var(--wf-muted);display:flex;align-items:center;gap:4px;margin-left:auto;}',
+      '#ic-log .log-header input{accent-color:var(--wf-hover-border);}',
+      '#ic-log .log-header button{background:var(--wf-chip);border:1px solid var(--wf-border);border-radius:var(--wf-radius);color:var(--wf-text);cursor:pointer;font-size:12px;padding:3px 7px;}',
+      '#ic-log .log-header button:hover{background:linear-gradient(0deg,var(--wf-hover-tint),var(--wf-chip) 90%);border-color:var(--wf-hover-border);}',
+      '#ic-log .log-body{flex:1;overflow-y:auto;padding:6px;font-size:12px;}',
+      '#ic-log .log-entry{padding:3px 6px;border-radius:4px;margin-bottom:1px;display:flex;justify-content:space-between;gap:8px;}',
+      '#ic-log .log-entry:hover{background:linear-gradient(0deg,var(--wf-hover-tint),transparent 90%);}',
+      '#ic-log .log-entry .log-time{font-size:10.5px;color:var(--wf-muted);white-space:nowrap;}',
+      '#ic-log .t-craft,#ic-log .t-diag{color:var(--wf-muted);}',
+      '#ic-log .t-new{color:var(--wf-green);}#ic-log .t-first{color:var(--wf-orange);font-weight:600;}',
+      '#ic-log .t-win{color:var(--wf-blue);font-weight:600;}#ic-log .t-fix{color:var(--wf-orange);}',
+      '#ic-log .t-fail{color:var(--wf-red);}#ic-log .t-round{color:var(--wf-blue);}',
       '#ic-log.hide-crafts .t-craft{display:none;}'
     ].join('\n');
     document.head.appendChild(s);
@@ -2784,6 +2811,9 @@
       injectCSS();
       this.buildPanel();
       this.buildLog();
+      // Keep matching the game's look (it can switch to dark mode at any time).
+      this.syncTheme();
+      setInterval(() => this.syncTheme(), 2000);
       this.loadSettings();
       this.status('Loading learned data...', 's-run');
       await Promise.all([this.mem.load(), this.ib.load(), this.tools.load()]);
@@ -2944,6 +2974,7 @@
 
     /* ---------- run control ---------- */
     _begin(mode) {
+      this._logged = new Set();
       this.token++;
       this.running = true;
       this.paused = false;
@@ -2982,6 +3013,7 @@
       this.$('#ic-start').disabled = this.running;
       this.$('#ic-pause').disabled = !this.running;
       this.$('#ic-pause').textContent = this.paused ? 'Resume' : 'Pause';
+      this.$('#ic-pause').setAttribute('data-emoji', this.paused ? '\u25B6\uFE0F' : '\u23F8\uFE0F');
     }
     _canCraft() {
       if (this.running) { this.status('Already running', 's-warn'); return false; }
@@ -3622,6 +3654,49 @@
       if (this._statsTimer) return;
       this._statsTimer = setTimeout(() => { this._statsTimer = null; this.renderStats(); }, 150);
     }
+    // Copy the game's own font, colours and item shape from a real item on the page, and follow
+    // its dark mode, so the panel looks like part of Infinite Craft.
+    syncTheme() {
+      try {
+        const targets = [this.panel, this.logPanel].filter(Boolean);
+        if (!targets.length) return;
+        const solid = (c) => (c && !/^(transparent|rgba\(\s*0,\s*0,\s*0,\s*0\s*\))$/.test(c.trim()) ? c : '');
+        const item = document.querySelector(C.itemSel) || document.querySelector('.item');
+        const ic = item ? getComputedStyle(item) : null;
+        let pageBg = '';
+        for (const el of [document.querySelector('.sidebar'), document.querySelector(C.container), document.body, document.documentElement]) {
+          const c = el && solid(getComputedStyle(el).backgroundColor);
+          if (c) { pageBg = c; break; }
+        }
+        const vars = {};
+        if (ic) {
+          if (solid(ic.backgroundColor)) vars['--wf-chip'] = ic.backgroundColor;
+          if (ic.color) vars['--wf-text'] = ic.color;
+          if (parseFloat(ic.borderTopWidth) > 0 && solid(ic.borderTopColor)) vars['--wf-border'] = ic.borderTopColor;
+          if (ic.borderTopLeftRadius && ic.borderTopLeftRadius !== '0px') vars['--wf-radius'] = ic.borderTopLeftRadius;
+          if (ic.fontFamily) vars['--wf-font'] = ic.fontFamily;
+        } else if (document.body) {
+          vars['--wf-font'] = getComputedStyle(document.body).fontFamily;
+        }
+        if (pageBg) vars['--wf-bg'] = pageBg;
+        const lum = (c) => {
+          const m = /rgba?\(([^)]+)\)/.exec(c || '');
+          if (!m) return 1;
+          const [r, g, b] = m[1].split(',').map((x) => parseFloat(x));
+          return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+        };
+        const dark = lum(pageBg || vars['--wf-chip']) < 0.45;
+        const sig = JSON.stringify(vars) + dark;
+        if (sig === this._themeSig) return;
+        this._themeSig = sig;
+        for (const t of targets) {
+          t.classList.toggle('wf-dark', dark);
+          for (const k of ['--wf-bg', '--wf-chip', '--wf-text', '--wf-border', '--wf-radius', '--wf-font']) {
+            if (vars[k]) t.style.setProperty(k, vars[k]); else t.style.removeProperty(k);
+          }
+        }
+      } catch (e) {}
+    }
     renderStats() {
       this.$('#ic-s-new').textContent = this.stats.newWords;
       this.$('#ic-s-disc').textContent = this.stats.firstDisc;
@@ -3629,8 +3704,7 @@
       this.$('#ic-s-forged').textContent = this.stats.forged;
       const badge = this.$('#ic-badge');
       badge.textContent = this.stats.newWords;
-      badge.style.background = this.stats.newWords ? 'var(--ic-green)' : 'var(--ic-accent2)';
-      badge.style.color = this.stats.newWords ? '#1a1a2e' : '#fff';
+      badge.classList.toggle('has-new', this.stats.newWords > 0);
     }
     renderInfo() {
       const el = this.$('#ic-info');
@@ -3642,6 +3716,13 @@
         (this.ib.rateLimited ? ', ' + this.ib.rateLimited + ' rate-limited' : '') +
         ' \u00b7 Known pair results: ' + this.mem.pairs.size + ' \u00b7 Text tools learned: ' + this.tools.size +
         ' \u00b7 Storage: ' + (this.mem.idb ? 'IndexedDB' : 'memory only');
+    }
+    // Same message only once per run (e.g. a recipe step that keeps giving something else).
+    logOnce(type, msg) {
+      this._logged = this._logged || new Set();
+      if (this._logged.has(msg)) return;
+      this._logged.add(msg);
+      this.log(type, msg);
     }
     log(type, msg) {
       const row = { type, msg, time: clock(), ts: now() };
@@ -3684,9 +3765,9 @@
       const chk = (opt, label, title) => '<label class="ic-check"' + (title ? ' title="' + title + '"' : '') + '><input type="checkbox" data-opt="' + opt + '"> ' + label + '</label>';
       p.innerHTML = [
         '<div class="ic-header" id="ic-header">',
-        '<span class="ic-title">⚒ Word Forge Pro</span>',
+        '<span class="ic-title">⚒️ Word Forge</span>',
         '<div style="display:flex;align-items:center;gap:6px;">',
-        '<div class="ic-badge" id="ic-badge" title="New items this session">0</div>',
+        '<div class="ic-badge" id="ic-badge" data-emoji="\u2728" title="New items this session">0</div>',
         '<button class="ic-minimize" id="ic-collapse" title="Collapse">−</button>',
         '</div></div>',
         '<div class="ic-body">',
@@ -3696,9 +3777,9 @@
         '<a class="ic-link" id="ic-lookup" href="#" target="_blank" rel="noopener" style="display:none;"></a>',
         '</div>',
         '<div class="ic-btn-row">',
-        '<button class="ic-btn ic-btn-start" id="ic-start">Start</button>',
-        '<button class="ic-btn ic-btn-pause" id="ic-pause" disabled>Pause</button>',
-        '<button class="ic-btn ic-btn-stop" id="ic-stop">Stop</button>',
+        '<button class="ic-btn ic-btn-start" id="ic-start" data-emoji="\u25B6\uFE0F">Start</button>',
+        '<button class="ic-btn" id="ic-pause" data-emoji="\u23F8\uFE0F" disabled>Pause</button>',
+        '<button class="ic-btn" id="ic-stop" data-emoji="\u23F9\uFE0F">Stop</button>',
         '</div>',
         '<div class="ic-now" id="ic-now">',
         '<div class="ic-now-target" id="ic-now-target"></div>',
@@ -3708,15 +3789,15 @@
         '<button class="ic-btn ic-btn-warn" id="ic-now-action" style="display:none;margin-top:2px;"></button>',
         '</div>',
         '<div class="ic-stats">',
-        '<div class="ic-stat green"><div class="ic-stat-val" id="ic-s-new">0</div><div class="ic-stat-label">New Words</div></div>',
-        '<div class="ic-stat orange"><div class="ic-stat-val" id="ic-s-disc">0</div><div class="ic-stat-label">First Discoveries</div></div>',
-        '<div class="ic-stat"><div class="ic-stat-val" id="ic-s-crafts">0</div><div class="ic-stat-label">Crafts</div></div>',
-        '<div class="ic-stat"><div class="ic-stat-val" id="ic-s-forged">0</div><div class="ic-stat-label">Targets Made</div></div>',
+        '<div class="ic-stat" data-emoji="\u2728" title="New items this session"><span class="ic-stat-val" id="ic-s-new">0</span><span class="ic-stat-label">new items</span></div>',
+        '<div class="ic-stat" data-emoji="\uD83C\uDFC6" title="First discoveries this session"><span class="ic-stat-val" id="ic-s-disc">0</span><span class="ic-stat-label">first discoveries</span></div>',
+        '<div class="ic-stat" data-emoji="\uD83D\uDD28" title="Crafts this session"><span class="ic-stat-val" id="ic-s-crafts">0</span><span class="ic-stat-label">crafts</span></div>',
+        '<div class="ic-stat" data-emoji="\uD83C\uDFAF" title="Words from your list made this session"><span class="ic-stat-val" id="ic-s-forged">0</span><span class="ic-stat-label">words made</span></div>',
         '</div>',
         '<div class="ic-btn-row">',
-        '<button class="ic-btn ic-btn-ghost" id="ic-skip" title="Skip the current target and move on">Skip</button>',
-        '<button class="ic-btn ic-btn-ghost" id="ic-exact" title="Only use a saved or Infinibrowser recipe for the first target">Exact Recipe</button>',
-        '<button class="ic-btn ic-btn-ghost" id="ic-logbtn">Log</button>',
+        '<button class="ic-btn" id="ic-skip" data-emoji="\u23ED\uFE0F" title="Skip the current target and move on">Skip</button>',
+        '<button class="ic-btn" id="ic-exact" data-emoji="\uD83D\uDCDC" title="Make the first word only from a saved or Infinibrowser recipe (no letter building)">Recipe</button>',
+        '<button class="ic-btn" id="ic-logbtn" data-emoji="\uD83D\uDCCB">Log</button>',
         '</div>',
         '<details class="ic-details" data-sec="strategies" open><summary>Strategies</summary><div class="ic-dbody">',
         chk('sIB', '1. Look it up on Infinibrowser', 'If someone already uploaded the word, craft its cheapest recipe; if a step fails, reroute through alternate recipes'),
@@ -3729,10 +3810,10 @@
         '</div></details>',
         '<details class="ic-details" data-sec="pokedex"><summary>National Pokedex</summary><div class="ic-dbody">',
         '<div class="ic-btn-row"><input class="ic-input" id="ic-poke-start" placeholder="Start #" style="flex:1;" title="National Dex number to start from" />',
-        '<button class="ic-btn ic-btn-ghost" id="ic-poke-load" style="flex:1.1;">Load Dex</button></div>',
-        '<div class="ic-btn-row"><button class="ic-btn ic-btn-ghost" id="ic-poke-run" style="flex:1.4;">Run</button>',
-        '<button class="ic-btn ic-btn-ghost" id="ic-poke-stop" style="flex:1;color:var(--ic-red);border-color:var(--ic-red);">Stop Dex</button>',
-        '<button class="ic-btn ic-btn-ghost" id="ic-poke-reset" style="flex:1;">Reset</button></div>',
+        '<button class="ic-btn" id="ic-poke-load" style="flex:1.1;">Load Dex</button></div>',
+        '<div class="ic-btn-row"><button class="ic-btn" id="ic-poke-run" style="flex:1.4;">Run</button>',
+        '<button class="ic-btn ic-btn-danger" id="ic-poke-stop" style="flex:1;">Stop Dex</button>',
+        '<button class="ic-btn" id="ic-poke-reset" style="flex:1;">Reset</button></div>',
         '<div class="ic-status" id="ic-poke-status" style="padding:5px;font-size:10px;">National Dex idle</div>',
         '</div></details>',
         '<details class="ic-details" data-sec="settings"><summary>Settings &amp; Data</summary><div class="ic-dbody">',
@@ -3743,21 +3824,21 @@
         chk('soundEnabled', 'Sound on discovery'),
         '<div class="ic-section-title" style="margin-top:4px;">Run a recipe</div>',
         '<textarea class="ic-textarea" id="ic-recipe-text" rows="2" placeholder="Water + Fire = Steam&#10;Steam + Earth = Mud"></textarea>',
-        '<div class="ic-btn-row"><button class="ic-btn ic-btn-ghost" id="ic-recipe-run">Run Recipe</button>',
-        '<button class="ic-btn ic-btn-ghost" id="ic-copy-recipe" disabled title="Copy the recipe used for the last word made">Copy Last Recipe</button></div>',
-        '<div class="ic-btn-row"><button class="ic-btn ic-btn-ghost" id="ic-export">Export</button>',
-        '<button class="ic-btn ic-btn-ghost" id="ic-import">Import</button></div>',
-        '<div class="ic-btn-row"><button class="ic-btn ic-btn-ghost" id="ic-relearn" title="Re-survey Infinibrowser for text tools">Re-learn Tools</button>',
-        '<button class="ic-btn ic-btn-warn" id="ic-clear">Clear Learned</button></div>',
-        '<div class="ic-btn-row"><button class="ic-btn ic-btn-ghost" id="ic-test-conn" title="Check every way of reaching Infinibrowser and show the results">Test Connection</button>',
-        '<button class="ic-btn ic-btn-ghost" id="ic-open-relay" title="Open infinibrowser.wiki in a tab the script can fetch recipes through">Open Infinibrowser Tab</button></div>',
-        '<div class="ic-btn-row"><button class="ic-btn ic-btn-ghost" id="ic-debug" title="Copy what it is building, why it is stuck, and the last 2000 crafts it tried">Copy Debug Info</button></div>',
+        '<div class="ic-btn-row"><button class="ic-btn" id="ic-recipe-run">Run Recipe</button>',
+        '<button class="ic-btn" id="ic-copy-recipe" disabled title="Copy the recipe used for the last word made">Copy Last Recipe</button></div>',
+        '<div class="ic-btn-row"><button class="ic-btn" id="ic-export">Export</button>',
+        '<button class="ic-btn" id="ic-import">Import</button></div>',
+        '<div class="ic-btn-row"><button class="ic-btn" id="ic-relearn" title="Re-survey Infinibrowser for text tools">Re-learn Tools</button>',
+        '<button class="ic-btn ic-btn-danger" id="ic-clear">Clear Learned</button></div>',
+        '<div class="ic-btn-row"><button class="ic-btn" id="ic-test-conn" title="Check every way of reaching Infinibrowser and show the results">Test Connection</button>',
+        '<button class="ic-btn" id="ic-open-relay" title="Open infinibrowser.wiki in a tab the script can fetch recipes through">Open Infinibrowser Tab</button></div>',
+        '<div class="ic-btn-row"><button class="ic-btn" id="ic-debug" title="Copy what it is building, why it is stuck, and the last 2000 crafts it tried">Copy Debug Info</button></div>',
         '<div class="ic-status" id="ic-save-info" style="padding:5px;font-size:10px;">Save: unknown</div>',
-        '<button class="ic-btn ic-btn-ghost" id="ic-rebind-save">Re-scan Save</button>',
+        '<button class="ic-btn" id="ic-rebind-save">Re-scan Save</button>',
         '<div class="ic-section-title" style="margin-top:4px;">Random exploring (optional)</div>',
         '<div class="ic-small">Only runs if you press this. Start never combines things at random.</div>',
         chk('depthFirst', 'Try newest items first'),
-        '<button class="ic-btn ic-btn-ghost" id="ic-explore" title="Combine random items to find new ones (no target)">Explore Randomly</button>',
+        '<button class="ic-btn" id="ic-explore" title="Combine random items to find new ones (no target)">Explore Randomly</button>',
         '<div class="ic-small" id="ic-info"></div>',
         '<a class="ic-link" href="https://infinibrowser.wiki/" target="_blank" rel="noopener">infinibrowser.wiki</a>',
         '<input type="file" id="ic-import-file" accept="application/json,.json" style="display:none;" />',

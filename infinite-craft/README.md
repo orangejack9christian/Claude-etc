@@ -101,6 +101,14 @@ exist.
 
 ## Changelog
 
+- **6.8.0**: The panel now looks like Infinite Craft. It's white with thin grey borders, and
+  buttons and stats are item-style chips with an emoji and the game's light-blue hover. The
+  panel copies the game's own font, colours and item shape from the page, and follows its dark
+  mode. From real-game debug info: the forge no longer replays the same broken recipe over
+  and over in a round (it remembers what it couldn't make), each "fix: … rerouting" line is
+  logged once per run, and building a piece separately and attaching it now also happens at
+  earlier points of the text (`"the_0b1"` + `“ivion”`), not only at the very end, where the
+  game kept turning `“the_0b1ivi”` + `“on”` into `“on_the_0b1ivi”`.
 - **6.7.0**: Characters no tool adds (like the `0` in `The_0b1ivion`) no longer stop the
   build. Before, it refused to start ("no known tool adds "0"") and waited forever. Now it
   makes that character on its own (the item `0`, quoted: `"0"`) and attaches it
