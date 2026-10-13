@@ -39,7 +39,9 @@ waits it re-checks Infinibrowser for new uploads. It never guesses at random.
 
 1. **Look it up on Infinibrowser.** It checks every spelling that counts as your word
    (`Fire Truck`, `fire truck`, `FIRE TRUCK`, ...). If someone has already uploaded it, it
-   crafts the cheapest recipe it finds. If a step doesn't work in your game or an ingredient
+   crafts the cheapest recipe it finds. It sticks with that recipe: a step that gives something else in your
+   game is rerouted through that item's other uploaded recipes, deeper each round, before the
+   word is ever built another way. If a step doesn't work in your game or an ingredient
    is missing, it reroutes through that item's other uploaded recipes. If remembered history
    disagrees with Infinibrowser, it re-crafts that pair once to find out which is right.
 2. **Phrases from words.** `Mr. Eremey Jeremy` = `Mr. Eremey` + `Jeremy`. First it only uses
@@ -101,6 +103,13 @@ exist.
 
 ## Changelog
 
+- **6.8.1**: A word that's on Infinibrowser is made from its Infinibrowser recipe. Before,
+  when one step of that recipe gave something else in your game, it rerouted only a little,
+  then switched to building the word letter by letter (for "Remove Underscore" that meant a
+  249-step detour through `"remove Underscore"`). Now it keeps rerouting that recipe deeper
+  each round, and only builds the word another way if every Infinibrowser route fails at the
+  deepest level. The card names the recipe it's following ("Infinibrowser recipe for X, step
+  80/249: ...").
 - **6.8.0**: The panel now looks like Infinite Craft. It's white with thin grey borders, and
   buttons and stats are item-style chips with an emoji and the game's light-blue hover. The
   panel copies the game's own font, colours and item shape from the page, and follows its dark

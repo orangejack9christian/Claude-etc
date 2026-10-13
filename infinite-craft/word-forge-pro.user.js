@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Infinite Craft - Word Forge Pro (Auto Combiner v6)
 // @namespace    https://neal.fun/infinite-craft/
-// @version      6.8.0
+// @version      6.8.1
 // @description  Type any word and it gets crafted: looks it up on Infinibrowser and crafts the uploaded recipe (self-healing), or builds brand-new words letter by letter with text tools learned from Infinibrowser. No random combining. Keeps the National Pokedex queue, history and save tools.
 // @match        https://neal.fun/infinite-craft*
 // @match        https://infinibrowser.wiki/*
@@ -92,7 +92,7 @@
   /* ============================================================
    * Config
    * ============================================================ */
-  const VERSION = '6.8.0';
+  const VERSION = '6.8.1';
 
   // Small settings stay in localStorage (same keys as v5.x so settings carry over).
   // Big learned data (tried pairs, pair results, Infinibrowser cache) lives in IndexedDB
@@ -1771,7 +1771,7 @@
         const ib = await this._input(b, ctx, depth, trail);
         if (!ib) return false;
         if (this.game.has(r, true)) continue;
-        this._say(ctx, 'Step ' + (i + 1) + '/' + steps.length + ': ' + ia + ' + ' + ib + ' → ' + r, (i + 1) / steps.length);
+        this._say(ctx, 'Infinibrowser recipe for ' + steps[steps.length - 1][2] + ', step ' + (i + 1) + '/' + steps.length + ': ' + ia + ' + ' + ib + ' → ' + r, (i + 1) / steps.length);
         const res = await this.craftPair(ia, ib, ctx, 'recipe', r);
         if (res === r || this.game.has(r, true)) continue;
         // Infinibrowser's step didn't reproduce in this game; find another route to r.
@@ -1843,6 +1843,7 @@
         if (!ctx.lookupLogged) { ctx.lookupLogged = true; this._plan(ctx, msg + (unknown ? '' : ', so it will be built letter by letter')); }
         return false;
       }
+      ctx.ibFound = found[0].id;
       for (const f of found) {
         await this._check(ctx);
         const steps = await this.ib.lineage(f.id);
@@ -1853,7 +1854,7 @@
         await this.ensure(f.id, ctx, ctx.level.depth, null);
         if (this._done(ctx)) return true;
       }
-      this._note(ctx, 'the Infinibrowser recipe for ' + found[0].id + " didn't fully work in this game", 7);
+      this._note(ctx, 'the Infinibrowser recipe for ' + found[0].id + " didn't fully work in this game yet", 7);
       return false;
     }
 
@@ -2576,6 +2577,12 @@
         const before = mark();
         if (S.ib && (await this.viaInfinibrowser(ctx))) break;
         if (this._done(ctx)) break;
+        // The word is on Infinibrowser but a step of its recipe gave something else in this
+        // game: reroute that recipe deeper (next round) before building the word another way.
+        if (ctx.ibFound && !nested && li < last && !this.ib.problem()) {
+          this.app.log('round', ctx.ibFound + ' is on Infinibrowser, but a step of its recipe gives something else in this game; rerouting it deeper before trying anything else');
+          continue;
+        }
         if (S.compound && (await this.viaCompound(ctx, false))) break;
         if (this._done(ctx)) break;
         if (S.build && (await this.viaStringBuild(ctx))) break;
