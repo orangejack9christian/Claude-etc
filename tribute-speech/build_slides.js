@@ -196,7 +196,7 @@ const notes = (n) => NOTES[n].join("\n\n");
   s = pres.addSlide({ masterName: "COVER_RIGHT", sectionTitle: "Conclusion" });
   s.addText("CARING · DEDICATED", { placeholder: "eyebrow" });
   s.addText("Thank You, Mrs. Teske", { placeholder: "title" });
-  await polaroid(s, { name: "Thanks", photo: "thanks", cx: 3.0, cy: 2.8, w: 2.7, photoH: 2.5, rot: -2, caption: "Mrs. Teske", hint: ["Mrs. Teske", "(or you with her)"] });
+  await polaroid(s, { name: "Thanks", photo: "thanks", cx: 3.0, cy: 2.8, w: 2.7, photoH: 2.5, rot: -2, caption: "Mrs. Teske & Her Husband", hint: ["Mrs. Teske", "and her husband"] });
   s.addNotes(notes(6));
 
   await pres.writeFile({ fileName: OUT });

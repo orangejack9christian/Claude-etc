@@ -29,7 +29,7 @@
 
 ## Photos
 
-The finished deck with your real photos was sent to you in chat. It isn't in this repo, because the repo is public and the photos show Mrs. Teske, other adults, and your classmates. `Tribute_Speech_Mrs_Teske.pptx` here keeps the placeholders. To rebuild the photo version, put the cropped photos in a folder and run `PHOTOS=<folder> OUT=<file> node build_slides.js`.
+The finished deck with your real photos was sent to you in chat. It isn't in this repo, because the repo is public and the photos show Mrs. Teske, her husband, and your classmates. `Tribute_Speech_Mrs_Teske.pptx` here keeps the placeholders. To rebuild the photo version, put the cropped photos in a folder and run `PHOTOS=<folder> OUT=<file> node build_slides.js`.
 
 | Slide | Caption | Photo |
 |---|---|---|
@@ -41,7 +41,7 @@ The finished deck with your real photos was sent to you in chat. It isn't in thi
 | 4 | Homework & Hard Tests | Pencil and notebook (online) |
 | 5 | 8th Grade Graduation | You with Mrs. Teske at graduation |
 | 5 | 11th Grade | You now |
-| 6 | Mrs. Teske | Mrs. Teske (photo with a man in a plaid shirt) |
+| 6 | Mrs. Teske & Her Husband | Mrs. Teske and her husband |
 
 The criteria allow "something online that represents a story you are telling," which covers the three online photos.
 
